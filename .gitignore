@@ -1,0 +1,10 @@
+.idea
+.claude
+.DS_Store
+
+# Build artifacts
+capsule-access-plane
+coverage.out
+
+# SQLite databases
+*.db

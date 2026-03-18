@@ -33,6 +33,7 @@ type Grant struct {
 	Actor               accessplane.ActorContext        `json:"actor"`
 	ReasonCode          string                         `json:"reason_code"`
 	ImplementationState accessplane.ImplementationState `json:"implementation_state"`
+	CredentialRef       string                         `json:"credential_ref,omitempty"`
 	ExpiresAt           time.Time                      `json:"expires_at"`
 	RevokedAt           *time.Time                     `json:"revoked_at,omitempty"`
 	CreatedAt           time.Time                      `json:"created_at"`

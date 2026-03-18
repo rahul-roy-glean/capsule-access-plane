@@ -62,10 +62,7 @@ func (e *ManifestBasedEngine) Evaluate(input PolicyInput) (*PolicyDecision, erro
 	}
 
 	// Rule 5: approval check
-	approvalRequired := false
-	if m.ExecutionHints != nil && m.ExecutionHints["require_approval"] == "true" {
-		approvalRequired = true
-	}
+	approvalRequired := m.ExecutionHints != nil && m.ExecutionHints["require_approval"] == "true"
 
 	// Rule 6: implementation availability — NEVER fall back to a different lane
 	implState := accessplane.StateImplemented

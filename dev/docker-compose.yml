@@ -1,0 +1,13 @@
+services:
+  access-plane:
+    build: ..
+    ports:
+      - "8080:8080"
+    env_file: env.example
+    volumes:
+      - data:/data
+    environment:
+      - DATABASE_URL=/data/capsule-access.db
+
+volumes:
+  data:
