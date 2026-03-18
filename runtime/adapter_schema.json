@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/rahul-roy-glean/capsule-access-plane/runtime/adapter",
+  "title": "RuntimeAdapter Contract Payloads",
+  "description": "JSON Schemas for the runtime adapter request/response payloads.",
+  "definitions": {
+    "install_grant_request": {
+      "type": "object",
+      "description": "Payload for InstallGrant — contains the full projection bundle.",
+      "required": ["version", "grant_id", "lane", "expires_at", "audit_metadata"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "enum": ["v1"]
+        },
+        "grant_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lane": {
+          "type": "string",
+          "enum": ["direct_http", "helper_session", "remote_execution"]
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "audit_metadata": {
+          "type": "object",
+          "required": ["user_id", "session_id", "runner_id"],
+          "properties": {
+            "user_id": { "type": "string", "minLength": 1 },
+            "session_id": { "type": "string", "minLength": 1 },
+            "runner_id": { "type": "string", "minLength": 1 },
+            "turn_id": { "type": "string" },
+            "agent_id": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "network_restrictions": {
+          "type": "object",
+          "properties": {
+            "allowed_cidrs": { "type": "array", "items": { "type": "string" } },
+            "allowed_hosts": { "type": "array", "items": { "type": "string" } },
+            "allowed_ports": { "type": "array", "items": { "type": "integer" } }
+          },
+          "additionalProperties": false
+        },
+        "proxy_config": {
+          "type": "object",
+          "required": ["listen_addr", "target_url"],
+          "properties": {
+            "listen_addr": { "type": "string", "minLength": 1 },
+            "target_url": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "helper_config": {
+          "type": "object",
+          "required": ["format", "socket_path"],
+          "properties": {
+            "format": { "type": "string", "minLength": 1 },
+            "socket_path": { "type": "string", "minLength": 1 },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "metadata_emulation": {
+          "type": "object",
+          "required": ["endpoint"],
+          "properties": {
+            "endpoint": { "type": "string", "minLength": 1 },
+            "headers": { "type": "object", "additionalProperties": { "type": "string" } }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "revoke_grant_request": {
+      "type": "object",
+      "description": "Payload for RevokeGrant.",
+      "required": ["grant_id", "runner_id"],
+      "properties": {
+        "grant_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runner_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "describe_grant_state_response": {
+      "type": "object",
+      "description": "Response from DescribeGrantState.",
+      "required": ["runner_id", "grant_id", "status", "lane", "expires_at"],
+      "properties": {
+        "runner_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "grant_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lane": {
+          "type": "string",
+          "enum": ["direct_http", "helper_session", "remote_execution"]
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "publish_runner_event_request": {
+      "type": "object",
+      "description": "Payload for PublishRunnerEvent.",
+      "required": ["type", "runner_id", "session_id", "timestamp"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "runner_allocated",
+            "runner_released",
+            "session_paused",
+            "session_resumed",
+            "session_forked",
+            "host_draining",
+            "grant_projection_removed"
+          ]
+        },
+        "runner_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

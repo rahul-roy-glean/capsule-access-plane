@@ -1,0 +1,19 @@
+family: internal_admin_cli
+version: "1.0"
+surface_kind: cli
+logical_actions:
+  - name: rotate_secrets
+    risk_class: admin
+    write: true
+  - name: drain_node
+    risk_class: admin
+    write: true
+supported_lanes:
+  - remote_execution
+preferred_lane:
+  default: remote_execution
+execution_hints:
+  require_approval: "true"
+  audit_level: "full"
+binary_matchers:
+  - internal-admin

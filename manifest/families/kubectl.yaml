@@ -1,0 +1,23 @@
+family: kubectl
+version: "1.0"
+surface_kind: cli
+logical_actions:
+  - name: get_pods
+    risk_class: standard
+    write: false
+  - name: apply_manifest
+    risk_class: elevated
+    write: true
+  - name: port_forward
+    risk_class: elevated
+    write: false
+supported_lanes:
+  - remote_execution
+  - helper_session
+preferred_lane:
+  default: remote_execution
+helper_support:
+  format: exec-credential
+  protocol: https
+binary_matchers:
+  - kubectl

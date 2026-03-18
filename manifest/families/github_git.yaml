@@ -1,0 +1,20 @@
+family: github_git
+version: "1.0"
+surface_kind: cli
+logical_actions:
+  - name: git_clone
+    risk_class: standard
+    write: false
+  - name: git_push
+    risk_class: elevated
+    write: true
+supported_lanes:
+  - helper_session
+  - remote_execution
+preferred_lane:
+  default: helper_session
+helper_support:
+  format: credential-helper
+  protocol: https
+binary_matchers:
+  - git

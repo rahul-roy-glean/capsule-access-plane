@@ -1,0 +1,18 @@
+family: gcp_cli_read
+version: "1.0"
+surface_kind: cli
+logical_actions:
+  - name: list_instances
+    risk_class: standard
+    write: false
+  - name: describe_bucket
+    risk_class: standard
+    write: false
+supported_lanes:
+  - remote_execution
+  - helper_session
+preferred_lane:
+  default: remote_execution
+binary_matchers:
+  - gcloud
+  - gsutil

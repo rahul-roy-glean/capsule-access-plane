@@ -1,0 +1,18 @@
+family: gcp_adc
+version: "1.0"
+surface_kind: sdk
+logical_actions:
+  - name: read_object
+    risk_class: standard
+    write: false
+  - name: write_object
+    risk_class: standard
+    write: true
+supported_lanes:
+  - helper_session
+preferred_lane:
+  default: helper_session
+helper_support:
+  format: google-executable-source
+  env:
+    GOOGLE_APPLICATION_CREDENTIALS: "/tmp/capsule/adc.json"
