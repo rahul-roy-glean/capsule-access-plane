@@ -86,6 +86,12 @@ func IsRequestAllowed(method, path string, constraints []MethodConstraint) Reque
 	}
 }
 
+// MatchPathGlob matches a URL path against a glob pattern.
+// "*" matches a single path segment. "**" matches zero or more segments.
+func MatchPathGlob(pattern, path string) bool {
+	return matchPathGlob(pattern, path)
+}
+
 // matchPathGlob matches a URL path against a glob pattern.
 // "*" matches a single path segment. "**" matches zero or more segments.
 func matchPathGlob(pattern, path string) bool {

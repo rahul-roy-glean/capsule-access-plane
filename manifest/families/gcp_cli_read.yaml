@@ -16,3 +16,6 @@ preferred_lane:
 binary_matchers:
   - gcloud
   - gsutil
+phantom_env:
+  CLOUDSDK_AUTH_ACCESS_TOKEN: "phantom"
+  CLOUDSDK_CORE_PROJECT: "phantom"

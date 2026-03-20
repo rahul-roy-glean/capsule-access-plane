@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/rahul-roy-glean/capsule-access-plane/grants"
 )
@@ -45,6 +46,19 @@ func buildProvider(cfg ProviderConfig, credResolver *grants.CredentialResolver) 
 
 	case "delegated":
 		return NewDelegatedProvider(cfg.Name, cfg.Hosts), nil
+
+	case "gcp-sa":
+		sa := cfg.Config["service_account"]
+		if sa == "" {
+			return nil, fmt.Errorf("gcp-sa provider requires config.service_account")
+		}
+		var scopes []string
+		if s := cfg.Config["scopes"]; s != "" {
+			for _, scope := range strings.Split(s, ",") {
+				scopes = append(scopes, strings.TrimSpace(scope))
+			}
+		}
+		return NewGCPServiceAccountProvider(cfg.Name, sa, scopes, cfg.Hosts), nil
 
 	default:
 		return nil, fmt.Errorf("unknown provider type %q", cfg.Type)

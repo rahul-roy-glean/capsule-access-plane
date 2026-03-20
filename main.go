@@ -125,6 +125,7 @@ func main() {
 	grantHandlers := server.NewGrantHandlers(verifier, grantService, adapter, providerRegistry, registry, logger)
 	executeHandler := server.NewExecuteHandler(verifier, registry, engine, providerRegistry, logger)
 	tokenHandlers := server.NewTokenHandlers(providerRegistry)
+	phantomHandlers := server.NewPhantomHandlers(registry)
 
 	mux := http.NewServeMux()
 
@@ -144,8 +145,9 @@ func main() {
 	// Wire remote broker execution endpoint
 	mux.Handle("POST /v1/execute/http", executeHandler)
 
-	// Wire token update endpoint
+	// Wire token update and phantom env endpoints
 	mux.HandleFunc("POST /v1/providers/update-token", tokenHandlers.UpdateToken)
+	mux.HandleFunc("GET /v1/phantom-env", phantomHandlers.GetPhantomEnv)
 
 	// Remaining stubs
 	mux.HandleFunc("POST /v1/events/runner", func(w http.ResponseWriter, r *http.Request) {

@@ -13,4 +13,27 @@ type Claims struct {
 	IssuedAt      time.Time `json:"issued_at"`
 	ExpiresAt     time.Time `json:"expires_at"`
 	NotBefore     time.Time `json:"not_before,omitempty"`
+
+	// IdentityMode indicates how the agent's identity is resolved:
+	//   "user-direct" (default) — agent acts on behalf of the requesting user.
+	//   "virtual" — agent has its own persistent identity.
+	IdentityMode string `json:"identity_mode,omitempty"`
+
+	// UserEmail is the human user's email when IdentityMode is "user-direct".
+	UserEmail string `json:"user_email,omitempty"`
+
+	// VirtualIdentityID is the agent's own identity when IdentityMode is "virtual".
+	VirtualIdentityID string `json:"virtual_identity_id,omitempty"`
+}
+
+// EffectiveIdentity returns the identity string for audit and policy purposes.
+// For user-direct mode, this is the user email. For virtual mode, the virtual ID.
+func (c *Claims) EffectiveIdentity() string {
+	if c.IdentityMode == "virtual" && c.VirtualIdentityID != "" {
+		return c.VirtualIdentityID
+	}
+	if c.UserEmail != "" {
+		return c.UserEmail
+	}
+	return c.RunnerID
 }

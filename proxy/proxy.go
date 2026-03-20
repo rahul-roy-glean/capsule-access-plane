@@ -80,6 +80,12 @@ func (p *ConnectProxy) Close() error {
 func (p *ConnectProxy) handleConn(clientConn net.Conn) {
 	defer func() { _ = clientConn.Close() }()
 
+	// Extract client source IP for session-scoped credential resolution.
+	clientIP := ""
+	if addr := clientConn.RemoteAddr(); addr != nil {
+		clientIP, _, _ = net.SplitHostPort(addr.String())
+	}
+
 	br := bufio.NewReader(clientConn)
 	req, err := http.ReadRequest(br)
 	if err != nil {
@@ -87,13 +93,13 @@ func (p *ConnectProxy) handleConn(clientConn net.Conn) {
 	}
 
 	if req.Method == http.MethodConnect {
-		p.handleConnect(clientConn, req)
+		p.handleConnect(clientConn, req, clientIP)
 	} else {
 		p.handlePlainHTTP(clientConn, req)
 	}
 }
 
-func (p *ConnectProxy) handleConnect(clientConn net.Conn, req *http.Request) {
+func (p *ConnectProxy) handleConnect(clientConn net.Conn, req *http.Request, clientIP string) {
 	start := time.Now()
 	host, port, err := net.SplitHostPort(req.Host)
 	if err != nil {
@@ -130,7 +136,7 @@ func (p *ConnectProxy) handleConnect(clientConn net.Conn, req *http.Request) {
 	targetAddr := net.JoinHostPort(host, port)
 
 	if hasProvider {
-		p.handleBump(clientConn, host, targetAddr, provider, start)
+		p.handleBump(clientConn, host, targetAddr, provider, clientIP, start)
 	} else {
 		p.handleTunnel(clientConn, targetAddr, start)
 	}
@@ -138,7 +144,7 @@ func (p *ConnectProxy) handleConnect(clientConn net.Conn, req *http.Request) {
 
 // handleBump performs SSL bump (MITM): TLS handshake with client using a
 // generated cert, then intercept HTTP requests and inject credentials.
-func (p *ConnectProxy) handleBump(clientConn net.Conn, host, targetAddr string, provider providers.CredentialProvider, start time.Time) {
+func (p *ConnectProxy) handleBump(clientConn net.Conn, host, targetAddr string, provider providers.CredentialProvider, clientIP string, start time.Time) {
 	// TLS handshake with client (we present a cert signed by our CA).
 	// We pre-generate the cert for the target host because SNI may be empty
 	// (e.g. when the client connects to an IP address).
@@ -176,11 +182,11 @@ func (p *ConnectProxy) handleBump(clientConn net.Conn, host, targetAddr string, 
 			return
 		}
 
-		p.handleMITMRequest(tlsConn, req, host, targetAddr, provider, start)
+		p.handleMITMRequest(tlsConn, req, host, targetAddr, provider, clientIP, start)
 	}
 }
 
-func (p *ConnectProxy) handleMITMRequest(clientConn net.Conn, req *http.Request, host, targetAddr string, provider providers.CredentialProvider, start time.Time) {
+func (p *ConnectProxy) handleMITMRequest(clientConn net.Conn, req *http.Request, host, targetAddr string, provider providers.CredentialProvider, clientIP string, start time.Time) {
 	// Validate method+path against manifest constraints.
 	if m := p.findManifestForHost(host); m != nil && len(m.MethodConstraints) > 0 {
 		check := manifest.IsRequestAllowed(req.Method, req.URL.Path, m.MethodConstraints)
@@ -204,7 +210,10 @@ func (p *ConnectProxy) handleMITMRequest(clientConn net.Conn, req *http.Request,
 		}
 	}
 
-	// Inject credentials.
+	// Inject credentials with source IP context for session-scoped resolution.
+	if clientIP != "" {
+		req = req.WithContext(providers.WithSourceIP(req.Context(), clientIP))
+	}
 	if err := provider.InjectCredentials(req); err != nil {
 		p.Logger.Error("credential injection failed", "host", host, "err", err)
 		resp := &http.Response{

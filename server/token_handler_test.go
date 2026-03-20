@@ -12,7 +12,7 @@ import (
 	"github.com/rahul-roy-glean/capsule-access-plane/providers"
 )
 
-func TestUpdateToken_Success(t *testing.T) {
+func TestUpdateToken_GlobalSuccess(t *testing.T) {
 	dp := providers.NewDelegatedProvider("mytoken", []string{"api.example.com"})
 	reg := providers.NewRegistry()
 	_ = reg.Register(dp)
@@ -35,9 +35,45 @@ func TestUpdateToken_Success(t *testing.T) {
 		t.Fatalf("status = %d, want 200. body: %s", rr.Code, rr.Body.String())
 	}
 
-	// Verify the token was stored.
 	if !dp.HasToken() {
 		t.Error("expected token to be stored")
+	}
+}
+
+func TestUpdateToken_SessionScoped(t *testing.T) {
+	dp := providers.NewDelegatedProvider("github", nil)
+	reg := providers.NewRegistry()
+	_ = reg.Register(dp)
+
+	handler := NewTokenHandlers(reg)
+
+	body, _ := json.Marshal(TokenUpdateRequest{
+		Provider:  "github",
+		SourceIP:  "10.0.0.1",
+		Token:     "alice-token",
+		ExpiresAt: time.Now().Add(time.Hour),
+		Identity: &TokenIdentity{
+			UserEmail:    "alice@glean.com",
+			ExtraHeaders: map[string]string{"X-Session": "s1"},
+		},
+	})
+
+	req := httptest.NewRequest("POST", "/v1/providers/update-token", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	handler.UpdateToken(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rr.Code, rr.Body.String())
+	}
+
+	// Verify session-scoped resolution.
+	ctx := providers.WithSourceIP(context.Background(), "10.0.0.1")
+	tok, err := dp.ResolveToken(ctx)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if tok != "alice-token" {
+		t.Errorf("token = %q", tok)
 	}
 }
 
@@ -52,7 +88,6 @@ func TestUpdateToken_UnknownProvider(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/providers/update-token", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
-
 	handler.UpdateToken(rr, req)
 
 	if rr.Code != http.StatusNotFound {
@@ -61,7 +96,6 @@ func TestUpdateToken_UnknownProvider(t *testing.T) {
 }
 
 func TestUpdateToken_NotDelegated(t *testing.T) {
-	// Register a static provider (not delegated).
 	fp := &fakeStaticProvider{name: "static-one"}
 	reg := providers.NewRegistry()
 	_ = reg.Register(fp)
@@ -75,7 +109,6 @@ func TestUpdateToken_NotDelegated(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/providers/update-token", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
-
 	handler.UpdateToken(rr, req)
 
 	if rr.Code != http.StatusBadRequest {
@@ -90,7 +123,6 @@ func TestUpdateToken_MissingFields(t *testing.T) {
 	body, _ := json.Marshal(TokenUpdateRequest{Provider: "x"})
 	req := httptest.NewRequest("POST", "/v1/providers/update-token", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
-
 	handler.UpdateToken(rr, req)
 
 	if rr.Code != http.StatusBadRequest {
@@ -101,10 +133,10 @@ func TestUpdateToken_MissingFields(t *testing.T) {
 // fakeStaticProvider is a minimal non-delegated provider for testing.
 type fakeStaticProvider struct{ name string }
 
-func (p *fakeStaticProvider) Name() string                                          { return p.name }
-func (p *fakeStaticProvider) Type() string                                          { return "static" }
-func (p *fakeStaticProvider) Matches(_ string) bool                                 { return false }
-func (p *fakeStaticProvider) InjectCredentials(_ *http.Request) error               { return nil }
-func (p *fakeStaticProvider) ResolveToken(_ context.Context) (string, error)        { return "", nil }
-func (p *fakeStaticProvider) Start(_ context.Context) error                         { return nil }
-func (p *fakeStaticProvider) Stop()                                                 {}
+func (p *fakeStaticProvider) Name() string                                   { return p.name }
+func (p *fakeStaticProvider) Type() string                                   { return "static" }
+func (p *fakeStaticProvider) Matches(_ string) bool                          { return false }
+func (p *fakeStaticProvider) InjectCredentials(_ *http.Request) error        { return nil }
+func (p *fakeStaticProvider) ResolveToken(_ context.Context) (string, error) { return "", nil }
+func (p *fakeStaticProvider) Start(_ context.Context) error                  { return nil }
+func (p *fakeStaticProvider) Stop()                                          {}

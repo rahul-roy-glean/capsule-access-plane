@@ -18,6 +18,7 @@ type ToolManifest struct {
 	ApprovalHints     map[string]string           `json:"approval_hints,omitempty" yaml:"approval_hints,omitempty"`
 	HelperSupport     *HelperSupport              `json:"helper_support,omitempty" yaml:"helper_support,omitempty"`
 	BinaryMatchers    []string                    `json:"binary_matchers,omitempty" yaml:"binary_matchers,omitempty"`
+	PhantomEnv        map[string]string           `json:"phantom_env,omitempty" yaml:"phantom_env,omitempty"`
 }
 
 // LogicalAction describes a discrete operation a tool can perform.
