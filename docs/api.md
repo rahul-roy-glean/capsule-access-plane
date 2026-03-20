@@ -1,6 +1,7 @@
 # API Reference
 
-All endpoints except `/healthz` require an HMAC-signed attestation token:
+All endpoints except `/healthz` and `/v1/providers/update-token` require an
+HMAC-signed attestation token:
 
 ```
 Authorization: Bearer <token>
@@ -212,10 +213,41 @@ and returns the response.
 |------|---------|
 | 400 | Unknown tool family, invalid URL, bad request body |
 | 401 | Missing or invalid attestation token |
-| 403 | Runner mismatch, disallowed host, policy denied |
-| 405 | HTTP method not allowed by manifest |
-| 500 | Credential resolution failure, policy evaluation error |
+| 403 | Runner mismatch, disallowed host, SSRF block, policy denied |
+| 405 | HTTP method or path not allowed by manifest |
+| 500 | Credential provider unavailable, resolution failure, policy error |
 | 502 | Outbound request failed, response read error |
+
+## POST /v1/providers/update-token
+
+Push a delegated credential token. Called by the host agent, not by VM agents.
+No attestation token required (intended for host-local communication).
+
+**Request:**
+
+```json
+{
+  "provider": "github",
+  "token": "ghs_installation_token_here",
+  "expires_at": "2026-03-20T11:00:00Z"
+}
+```
+
+**Response (200):**
+
+```json
+{
+  "status": "updated",
+  "provider": "github"
+}
+```
+
+**Error codes:**
+
+| Code | Meaning |
+|------|---------|
+| 400 | Missing fields, provider is not a delegated type |
+| 404 | Unknown provider name |
 
 ## POST /v1/events/runner
 
@@ -233,8 +265,24 @@ curl http://127.0.0.1:54321/path \
 
 The proxy:
 - validates the target host against the manifest
-- validates the HTTP method against method constraints
+- checks SSRF (DNS resolve, reject private IPs)
+- validates the HTTP method and URL path against manifest constraints
+- strips hop-by-hop headers (Connection, Proxy-Authorization, etc.)
 - injects `Authorization: Bearer <credential>`
 - forwards the request and streams the response
 
-Headers from the original request are forwarded (except `X-Target-URL`).
+## Using the CONNECT Proxy
+
+Set `HTTPS_PROXY` in the VM and make standard HTTPS requests:
+
+```bash
+export HTTPS_PROXY=http://172.16.0.1:3128
+curl https://api.github.com/repos/org/repo
+```
+
+The proxy:
+- validates the CONNECT target host against all manifest destinations
+- checks SSRF
+- if a credential provider matches the host: SSL bump (MITM), inject credentials, enforce method+path
+- if no provider: raw tunnel (no inspection, no credential injection)
+- rejects hosts not in any manifest with 403

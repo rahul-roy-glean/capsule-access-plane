@@ -10,6 +10,7 @@ validated against the manifest for its tool family.
 family: string              # unique identifier (e.g., "github_rest")
 version: string             # manifest version
 surface_kind: string        # "http" or "cli"
+provider: string            # optional — named credential provider (e.g., "github")
 
 logical_actions:            # named operations the tool can perform
   - name: string
@@ -35,14 +36,17 @@ destinations:               # allowed target hosts
   - host: string
     port: int               # optional
     protocol: string        # optional ("https")
+    allowed_ips:            # optional — CIDR allowlist for SSRF (overrides default blocking)
+      - "140.82.112.0/20"
 
 method_constraints:         # allowed HTTP methods and path patterns
   - method: string          # "GET", "POST", "PUT", "DELETE", etc.
     path_pattern: string    # glob pattern (e.g., "/repos/**")
+    enforcement: string     # "enforce" (default) or "audit"
 
 execution_hints:            # operator-facing flags
-  require_approval: "true"  # requires human approval before execution
-  audit_level: "full"       # audit verbosity
+  require_approval: "true"
+  audit_level: "full"
 
 helper_support:             # credential helper config (for helper_session lane)
   format: string            # "exec-credential", "git-credential", etc.
@@ -53,6 +57,59 @@ helper_support:             # credential helper config (for helper_session lane)
 binary_matchers:            # CLI binary names this family applies to
   - string
 ```
+
+## Path Patterns
+
+Method constraints support glob patterns for URL path enforcement:
+
+| Pattern | Matches | Does not match |
+|---------|---------|----------------|
+| `/repos/**` | `/repos/foo`, `/repos/foo/bar/baz` | `/users/foo` |
+| `/repos/*/issues` | `/repos/myrepo/issues` | `/repos/myrepo/pulls` |
+| `/repos/*/pulls/*/merge` | `/repos/r/pulls/42/merge` | `/repos/r/pulls/42/close` |
+| `/**` | anything | — |
+| (empty) | anything for that method | — |
+
+- `*` matches exactly one path segment
+- `**` matches zero or more segments (any depth)
+
+## Enforcement Modes
+
+Each method constraint can specify an enforcement mode:
+
+- **`enforce`** (default) — reject requests that don't match
+- **`audit`** — allow the request but log a warning; useful for rolling out
+  new constraints without breaking existing clients
+
+## SSRF Protection via AllowedIPs
+
+By default, `CheckSSRF` blocks any destination that DNS-resolves to a private
+IP (RFC 1918, loopback, link-local). This prevents DNS rebinding attacks.
+
+If a destination needs to reach private infrastructure (e.g., a local test
+server), set `allowed_ips` to a CIDR allowlist:
+
+```yaml
+destinations:
+  - host: internal-api.corp
+    allowed_ips: ["10.0.0.0/8"]
+```
+
+When `allowed_ips` is set, resolved IPs must fall within those CIDRs (the
+default private-IP blocking is replaced by the explicit allowlist).
+
+## Provider Field
+
+The `provider` field references a named credential provider from the provider
+registry. When set, the execute handler and grant handler use that specific
+provider instead of the default.
+
+```yaml
+family: github_rest
+provider: github    # uses the "github" provider from PROVIDERS_CONFIG
+```
+
+If `provider` is empty, the default provider is used (from `CREDENTIAL_REF`).
 
 ## Shipped Families
 
@@ -116,8 +173,17 @@ The policy engine looks up the manifest to:
 
 The handler looks up the manifest to:
 - validate the target host is in the `destinations` list
-- validate the HTTP method is in the `method_constraints` list
-- (planned) validate the URL path matches the `path_pattern`
+- run SSRF check using the destination's `allowed_ips`
+- validate the HTTP method and URL path against `method_constraints` (with glob matching)
+- resolve credential from the named `provider` (or fall back to default)
+
+### At CONNECT proxy time
+
+The proxy checks all manifest destinations to:
+- validate the CONNECT target host
+- run SSRF check
+- find a credential provider via `providers.ForHost()`
+- enforce method+path on MITM'd requests
 
 ### Adding a new family
 
@@ -128,8 +194,6 @@ The handler looks up the manifest to:
 
 ## What's Not Enforced Yet
 
-- **Path patterns** — `method_constraints[].path_pattern` is declared but not
-  checked at runtime. Only the method is validated. Path enforcement is planned.
 - **Auth patterns** — `auth_patterns` is informational. The access plane
   currently always injects Bearer tokens regardless of this field.
 - **Port/protocol** — `destinations[].port` and `protocol` are stored but

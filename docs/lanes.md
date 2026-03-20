@@ -12,19 +12,23 @@ agent can see, and what level of control the access plane retains.
                      │ Remote Execution │ Direct HTTP        │ Helper Session   │
                      │ (Lane 1)         │ (Lane 2)           │ (Lane 3)         │
 ┌────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Credential visible │ No               │ In proxy transit   │ In helper only   │
-│ to agent?          │                  │                    │                  │
+│ Credential visible │ No               │ No (CONNECT proxy) │ In helper only   │
+│ to agent?          │                  │ In transit (grant)  │                  │
 ├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Agent makes own    │ No               │ Yes (via proxy)    │ Yes (via CLI)    │
-│ HTTP calls?        │                  │                    │                  │
+│ Agent makes own    │ No               │ Yes (HTTPS_PROXY    │ Yes (via CLI)    │
+│ HTTP calls?        │                  │  or grant proxy)    │                  │
 ├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Streaming support  │ No (sync req/res)│ Yes (full proxy)   │ Yes (native CLI) │
+│ Streaming support  │ No (sync req/res)│ Yes (full proxy)    │ Yes (native CLI) │
 ├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Surface kind       │ http             │ http               │ cli              │
+│ SSRF protection    │ Yes              │ Yes                 │ N/A              │
 ├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Audit granularity  │ Per-request      │ Per-grant          │ Per-session      │
+│ Path enforcement   │ Yes (glob)       │ Yes (glob)          │ N/A              │
 ├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Status             │ Implemented      │ Implemented        │ Not implemented  │
+│ Surface kind       │ http             │ http                │ cli              │
+├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
+│ Audit granularity  │ Per-request      │ Per-request         │ Per-session      │
+├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
+│ Status             │ Implemented      │ Implemented         │ Not implemented  │
 └────────────────────┴──────────────────┴────────────────────┴──────────────────┘
 ```
 
@@ -43,13 +47,14 @@ Agent                    Access Plane                External API
   │ {method, url, headers}   │                           │
   │─────────────────────────►│                           │
   │                          │ validate manifest         │
+  │                          │ SSRF check                │
+  │                          │ enforce method + path     │
   │                          │ evaluate policy           │
   │                          │ resolve credential        │
   │                          │                           │
   │                          │ GET https://api.github.com│
   │                          │ Authorization: Bearer *** │
   │                          │──────────────────────────►│
-  │                          │                           │
   │                          │◄──────────────────────────│
   │                          │ 200 + response body       │
   │                          │                           │
@@ -62,68 +67,64 @@ Agent                    Access Plane                External API
 The agent never sees the token in any form.
 
 **Limitations:** Synchronous only. Response body capped at 10 MB. No streaming.
-Not suitable for large file downloads or WebSocket connections.
 
 ## Lane 2: Direct HTTP
 
-**Endpoints:** Grant lifecycle (`/v1/grants/*`)
+Two modes are available:
 
-The agent requests a grant, receives a local proxy address, and makes its own
-HTTP calls through the proxy. The proxy validates each request against the
-manifest and injects the credential.
+### CONNECT Proxy (SSL Bump)
+
+The VM sets `HTTPS_PROXY` and makes standard HTTPS calls. The access plane
+proxy intercepts CONNECT requests and selectively MITM's them.
+
+```text
+VM                       Access Plane Proxy           External API
+  │                          │                           │
+  │ CONNECT host:443         │                           │
+  │─────────────────────────►│                           │
+  │◄─ 200 Established ──────│                           │
+  │                          │                           │
+  │◄── TLS handshake ──────►│ (CA-signed leaf cert)     │
+  │                          │                           │
+  │── GET /repos/foo ───────►│                           │
+  │                          │── GET /repos/foo ────────►│
+  │                          │   + Bearer token          │
+  │                          │◄─────────────────────────│
+  │◄─────────────────────────│                           │
+```
+
+**Selective bump:** Only hosts with a credential provider are MITM'd. Other
+allowed hosts are raw-tunneled (no inspection, no credential injection).
+Hosts not in any manifest are rejected with 403.
+
+**When to use:** When the agent should use standard HTTP clients/libraries
+with no code changes. Best for transparent credential injection at scale.
+
+### Grant-Based Forward Proxy
+
+The agent requests a grant, receives a local proxy address, and sends requests
+with `X-Target-URL` headers.
 
 ```text
 Agent                    Proxy (localhost:N)          External API
-  │                          │                           │
-  │ POST /v1/grants/project  │                           │
-  │─────────────────────────►│ start proxy               │
-  │◄─────────────────────────│                           │
-  │ projection_ref=:54321    │                           │
-  │                          │                           │
-  │ GET http://localhost:54321                            │
-  │ X-Target-URL: https://api.github.com/repos/foo/bar   │
-  │─────────────────────────►│                           │
-  │                          │ validate host + method    │
-  │                          │ inject Bearer token       │
-  │                          │──────────────────────────►│
-  │                          │◄──────────────────────────│
-  │◄─────────────────────────│ streamed response         │
-  │                          │                           │
-  │ POST /v1/grants/revoke   │                           │
-  │─────────────────────────►│ stop proxy                │
+  │ POST /v1/grants/project                              │
+  │─────────────────────►│ start proxy                   │
+  │◄─────────────────────│ projection_ref=:54321         │
+  │                      │                               │
+  │ GET localhost:54321  │                               │
+  │ X-Target-URL: https://api.github.com/repos/foo       │
+  │─────────────────────►│ validate + SSRF + inject      │
+  │                      │──────────────────────────────►│
+  │◄─────────────────────│◄──────────────────────────────│
 ```
 
-**When to use:** When the agent needs streaming, multiple sequential requests
-against the same API, or when the tool expects to make its own HTTP calls
-(e.g., SDK clients).
-
-**Limitations:** The credential passes through the local proxy, so a
-sufficiently motivated agent could observe it in transit. The proxy runs on
-localhost inside the microVM. Grants are time-limited and revocable.
+**When to use:** When the agent needs explicit grant lifecycle control
+(project, exchange, refresh, revoke) or when the CONNECT proxy is not available.
 
 ## Lane 3: Helper Session (not yet implemented)
 
 For CLI tools that use credential helper protocols — `git credential fill`,
 kubectl exec-credential plugins, `gcloud auth print-access-token`, etc.
-
-The access plane would manage helper processes or serve a credential-helper
-protocol endpoint. The CLI tool calls the helper, receives a short-lived
-credential, and proceeds with its native protocol.
-
-```text
-Agent (CLI)              Access Plane Helper          External Service
-  │                          │                           │
-  │ git credential fill      │                           │
-  │─────────────────────────►│                           │
-  │◄─────────────────────────│                           │
-  │ username + password       │                           │
-  │                          │                           │
-  │ git push (native HTTPS)  │                           │
-  │──────────────────────────────────────────────────────►│
-```
-
-**When to use:** CLI tools that don't speak HTTP directly — git, kubectl,
-gcloud. These tools expect credentials through well-defined helper protocols.
 
 **Families that need this:** `github_git`, `kubectl`, `gcp_cli_read`, `gcp_adc`.
 
@@ -151,7 +152,3 @@ Policy engine:
   4. Check implementation_availability map
   5. Return selected lane + implementation state
 ```
-
-The policy engine never falls back to a different lane if the selected one is
-unimplemented — it returns the correct lane with `implementation_deferred` so
-the caller knows the lane exists but isn't ready yet.

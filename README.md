@@ -16,53 +16,42 @@ shouldn't, or use HTTP methods the operator never intended.
 The access plane eliminates this class of risk:
 
 - **Credentials stay outside the sandbox.** The agent never sees a raw token.
-  It either gets a scoped local proxy (direct HTTP) or asks the access plane to
-  make the call on its behalf (remote execution).
-- **Every call is manifest-validated.** Allowed destinations, HTTP methods, and
-  logical actions are declared per tool family in YAML manifests. Anything
-  outside the manifest is rejected before a network connection is made.
+  It either uses a CONNECT proxy that injects credentials transparently, gets a
+  scoped local proxy (direct HTTP), or asks the access plane to make the call
+  on its behalf (remote execution).
+- **Every call is manifest-validated.** Allowed destinations, HTTP methods, URL
+  paths, and logical actions are declared per tool family in YAML manifests.
+  Anything outside the manifest is rejected before a network connection is made.
+- **SSRF protection.** DNS resolution is validated on every outbound connection.
+  Private IPs (RFC 1918, loopback, link-local, GCP metadata) are blocked unless
+  explicitly allowlisted per destination.
 - **Policy is evaluated on every request.** A pluggable policy engine decides
   allow/deny and selects the execution lane based on risk class, tool family,
   and operator configuration.
-- **Full audit trail.** Every resolve, grant, and execute operation is
+- **Full audit trail.** Every resolve, grant, execute, and proxy operation is
   structured-logged with session, runner, and correlation identifiers.
 
 ## How It Works
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│                     Capsule microVM                         │
-│                                                             │
-│  Agent ──► POST /v1/resolve ──► "use direct_http"           │
-│         │                                                   │
-│         ├► POST /v1/grants/project ──► proxy on :54321      │
-│         │     └── sandbox calls proxy ──► proxy injects     │
-│         │         credential ──► api.github.com             │
-│         │                                                   │
-│         └► POST /v1/execute/http ──► access plane makes     │
-│               the call, returns response ──► agent gets     │
-│               status + headers + body, never the credential │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                     Capsule microVM                             │
+│                                                                 │
+│  Agent ──► HTTPS_PROXY=172.16.0.1:3128                          │
+│            curl https://api.github.com/repos/foo/bar            │
+│                 └── CONNECT proxy: SSL bump, inject credential  │
+│                                                                 │
+│  Agent ──► POST /v1/execute/http ──► access plane makes the     │
+│            call, returns response ──► agent never sees token     │
+│                                                                 │
+│  Agent ──► POST /v1/grants/project ──► proxy on :54321          │
+│            sandbox calls proxy ──► proxy injects credential      │
+└─────────────────────────────────────────────────────────────────┘
 ```
-
-The access plane sits between the sandbox and the outside world. It validates
-identity via HMAC attestation tokens, checks policy, and then either starts a
-local credential-injecting proxy or makes the outbound call directly.
 
 ## Execution Lanes
 
-The access plane supports three execution lanes. Each represents a different
-trust/fidelity tradeoff:
-
 ### Lane 1: Remote Execution (recommended default)
-
-```text
-Agent ──► POST /v1/execute/http ──► Access Plane ──► External API
-                                        │
-                              credential injected here
-                              manifest + policy checked
-                              response returned to agent
-```
 
 The agent sends "make this HTTP call for me." The access plane validates
 everything, injects the credential, makes the call, and returns the response.
@@ -70,28 +59,26 @@ The credential never leaves the access plane process.
 
 **Status: Implemented** — `POST /v1/execute/http`
 
-### Lane 2: Direct HTTP (local proxy)
+### Lane 2: Direct HTTP
 
-```text
-Agent ──► POST /v1/grants/project ──► proxy starts on localhost:N
-Agent ──► GET http://localhost:N (X-Target-URL: https://api.github.com/...)
-              └── proxy validates host + method
-              └── proxy injects Bearer token
-              └── proxy forwards to target
-```
+Two modes:
 
-The agent gets a grant, receives a local proxy address, and makes HTTP calls
-through it. The proxy enforces the manifest and injects credentials
-transparently. The agent sees the credential in transit through the local proxy,
-but it is scoped to the grant's lifetime and the manifest's allowed destinations.
+**CONNECT Proxy (SSL bump):** The VM sets `HTTPS_PROXY` and makes standard
+HTTPS requests. The proxy selectively MITM's connections to hosts with a
+credential provider (injecting tokens), and raw-tunnels everything else.
+
+**Status: Implemented** — `PROXY_ADDR` env var
+
+**Grant-based forward proxy:** The agent gets a grant, receives a local proxy
+address, and sends requests with `X-Target-URL` headers. The proxy enforces
+the manifest and injects credentials.
 
 **Status: Implemented** — grant lifecycle + forward proxy
 
 ### Lane 3: Helper Session
 
 For CLI tools (kubectl, git) that use credential helpers or exec-credential
-protocols. The access plane would manage helper processes that feed credentials
-to the CLI tool on demand.
+protocols.
 
 **Status: Not yet implemented**
 
@@ -114,28 +101,22 @@ logical_actions:
 supported_lanes:
   - direct_http
   - remote_execution
-preferred_lane:
-  default: direct_http
 destinations:
   - host: api.github.com
     port: 443
     protocol: https
+    allowed_ips:                    # optional CIDR allowlist for SSRF
+      - "140.82.112.0/20"
 method_constraints:
   - method: GET
-    path_pattern: "/repos/**"
+    path_pattern: "/repos/**"       # ** matches any depth
   - method: POST
-    path_pattern: "/repos/*/issues"
+    path_pattern: "/repos/*/issues" # * matches one segment
+    enforcement: enforce            # "enforce" (default) or "audit"
 ```
 
 Shipped families: `github_rest`, `github_git`, `gcp_cli_read`, `gcp_adc`,
 `kubectl`, `internal_admin_cli`.
-
-The manifest is the source of truth for:
-- which hosts the agent can reach
-- which HTTP methods are allowed
-- which lanes are supported
-- what risk class each action carries
-- whether approval is required
 
 ## API Reference
 
@@ -148,10 +129,11 @@ The manifest is the source of truth for:
 | `/v1/grants/refresh` | POST | Extend grant lifetime |
 | `/v1/grants/revoke` | POST | Revoke grant and stop proxy |
 | `/v1/execute/http` | POST | Remote broker execution — make an HTTP call on behalf of the agent |
+| `/v1/providers/update-token` | POST | Push a delegated credential token (from host agent) |
 | `/v1/events/runner` | POST | Runner lifecycle events (not yet implemented) |
 
-All endpoints except `/healthz` require an HMAC-signed attestation token in the
-`Authorization: Bearer <token>` header.
+All endpoints except `/healthz` and `/v1/providers/update-token` require an
+HMAC-signed attestation token in the `Authorization: Bearer <token>` header.
 
 ## Project Structure
 
@@ -161,13 +143,16 @@ audit/                Structured audit logging
 bundle/               Projection bundles for grant lifecycle
 cmd/gentoken/         CLI tool to generate signed attestation tokens (for dev/test)
 dev/                  Docker Compose, env template, smoke test script
-grants/               Grant lifecycle service + credential resolution
+examples/             Usage examples (basic setup, CONNECT proxy, delegated tokens, etc.)
+grants/               Grant lifecycle service
 identity/             HMAC attestation token signing and verification
-manifest/             Tool family manifests, registry, validation helpers
+manifest/             Tool family manifests, registry, validation, SSRF protection
   families/           YAML manifest definitions (embedded at build time)
 policy/               Policy engine — manifest-based allow/deny + lane selection
+providers/            Credential provider framework (static, delegated, registry, config loader)
+proxy/                HTTPS CONNECT proxy with selective SSL bump
 runtime/              Runtime adapters (direct HTTP forward proxy)
-server/               HTTP handlers (resolve, grants, execute)
+server/               HTTP handlers (resolve, grants, execute, token update)
 store/                SQLite persistence
 ```
 
@@ -186,21 +171,23 @@ export GITHUB_TOKEN=ghp_your_token_here
 go run .
 ```
 
-### Run with Docker
+### Run with CONNECT proxy
 
 ```bash
-cp dev/env.example .env    # edit .env with your values
-docker compose -f dev/docker-compose.yml up --build
+export ATTESTATION_SECRET=local-dev-secret
+export CREDENTIAL_REF="env:GITHUB_TOKEN"
+export GITHUB_TOKEN=ghp_your_token_here
+export PROXY_ADDR=":3128"
+go run .
 ```
 
-### Run the smoke test
+### Run with provider config
 
 ```bash
-# Against a running server on localhost:8080
-./dev/smoke-test.sh
-
-# Against a custom address
-./dev/smoke-test.sh http://localhost:9090
+export ATTESTATION_SECRET=local-dev-secret
+export PROVIDERS_CONFIG=./examples/multi-provider/providers.json
+export PROXY_ADDR=":3128"
+go run .
 ```
 
 ### Run the test suite
@@ -216,23 +203,23 @@ make lint        # just linting
 | Environment Variable | Required | Default | Description |
 |---------------------|----------|---------|-------------|
 | `ATTESTATION_SECRET` | Yes | — | Shared HMAC secret for runner attestation tokens |
-| `GITHUB_TOKEN` | Yes | — | Credential injected into outbound API calls |
-| `LISTEN_ADDR` | No | `:8080` | Server listen address |
+| `LISTEN_ADDR` | No | `:8080` | HTTP API listen address |
 | `DATABASE_URL` | No | `capsule-access.db` | SQLite database path |
-| `CREDENTIAL_REF` | No | `env:GITHUB_TOKEN` | Credential reference (supports `env:`, `literal:`, `stored:`) |
+| `CREDENTIAL_REF` | No | `env:GITHUB_TOKEN` | Default credential reference (`env:`, `literal:`, `stored:`) |
+| `PROVIDERS_CONFIG` | No | — | Path to JSON file with `[]ProviderConfig` for named providers |
+| `PROXY_ADDR` | No | — | CONNECT proxy listen address (e.g. `:3128`). Empty = no proxy. |
 
 ## What's Missing
 
 The following are designed but not yet implemented:
 
 - [ ] **Helper session lane** — credential helper protocol for CLI tools (kubectl, git)
+- [ ] **Denial feedback pipeline** — aggregate denied requests, propose manifest additions, approve/reject workflow
 - [ ] **Runner lifecycle events** — `POST /v1/events/runner` for allocation, release, pause, resume signals
-- [ ] **Multi-credential support** — per-tool-family credential references (currently one global ref)
-- [ ] **Path pattern enforcement** — method constraints declare `path_pattern` but only the method is currently checked
 - [ ] **Approval workflow** — policy can flag `approval_required` but there is no approval UI or API
-- [ ] **Token scoping / short-lived credentials** — credential rotation, OAuth token exchange
 - [ ] **Rate limiting** — per-runner, per-tool-family request rate limits
 - [ ] **Metrics endpoint** — Prometheus-compatible `/metrics`
+- [ ] **GCP metadata emulation** — `gatewayIP:80` metadata server for GCP workloads
 
 ## Documentation
 
@@ -240,6 +227,7 @@ The following are designed but not yet implemented:
 - [docs/lanes.md](docs/lanes.md) — detailed lane comparison and selection logic
 - [docs/manifests.md](docs/manifests.md) — manifest schema, authoring guide, shipped families
 - [docs/api.md](docs/api.md) — endpoint reference with request/response examples
+- [examples/](examples/) — runnable examples with curl commands and config files
 
 ## Relationship to Capsule
 
@@ -252,6 +240,8 @@ they access external authenticated services.
 The two systems communicate through:
 - **Attestation tokens** — Capsule's control plane issues HMAC tokens that the
   access plane verifies
+- **Provider token push** — the host agent pushes delegated tokens via
+  `POST /v1/providers/update-token`
 - **Runner lifecycle events** — Capsule notifies the access plane when runners
   are allocated, released, or paused (planned)
 
