@@ -56,6 +56,10 @@ helper_support:             # credential helper config (for helper_session lane)
 
 binary_matchers:            # CLI binary names this family applies to
   - string
+
+phantom_env:                # env vars injected into VM to satisfy CLI local checks
+  CLOUDSDK_AUTH_ACCESS_TOKEN: "phantom"
+  GITHUB_TOKEN: "phantom"
 ```
 
 ## Path Patterns
@@ -110,6 +114,37 @@ provider: github    # uses the "github" provider from PROVIDERS_CONFIG
 ```
 
 If `provider` is empty, the default provider is used (from `CREDENTIAL_REF`).
+
+Provider types available in `PROVIDERS_CONFIG`:
+
+```json
+[
+  {"name": "github", "type": "delegated", "hosts": ["api.github.com"]},
+  {"name": "internal", "type": "static", "hosts": ["api.corp"], "config": {"credential_ref": "env:TOKEN"}},
+  {"name": "gcp", "type": "gcp-sa", "hosts": ["*.googleapis.com"], "config": {
+    "service_account": "runner@proj.iam.gserviceaccount.com",
+    "scopes": "https://www.googleapis.com/auth/cloud-platform"
+  }}
+]
+```
+
+## Phantom Env Vars
+
+Some CLIs (gcloud, kubectl, gh) check for credentials locally before making
+HTTP calls. Without a token in the environment, they refuse to send the
+request that the proxy would intercept. The `phantom_env` field declares
+dummy env vars to inject into the VM:
+
+```yaml
+phantom_env:
+  CLOUDSDK_AUTH_ACCESS_TOKEN: "phantom"
+  CLOUDSDK_CORE_PROJECT: "phantom"
+```
+
+The host agent calls `GET /v1/phantom-env?families=...` at VM boot to
+collect the union of phantom vars needed for the session's tool families.
+The values are worthless — the CONNECT proxy replaces them with real
+credentials at the network boundary.
 
 ## Shipped Families
 

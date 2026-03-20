@@ -130,6 +130,7 @@ Shipped families: `github_rest`, `github_git`, `gcp_cli_read`, `gcp_adc`,
 | `/v1/grants/revoke` | POST | Revoke grant and stop proxy |
 | `/v1/execute/http` | POST | Remote broker execution — make an HTTP call on behalf of the agent |
 | `/v1/providers/update-token` | POST | Push a delegated credential token (from host agent) |
+| `/v1/phantom-env` | GET | Return phantom env vars for CLI satisfaction (called by host agent at VM boot) |
 | `/v1/events/runner` | POST | Runner lifecycle events (not yet implemented) |
 
 All endpoints except `/healthz` and `/v1/providers/update-token` require an
@@ -213,10 +214,11 @@ make lint        # just linting
 
 The following are designed but not yet implemented:
 
-- [ ] **Helper session lane** — credential helper protocol for CLI tools (kubectl, git)
+- [ ] **Helper session lane** — credential helper protocol for CLI tools (kubectl, git). Largely superseded by the CONNECT proxy for HTTPS-based tools.
 - [ ] **Denial feedback pipeline** — aggregate denied requests, propose manifest additions, approve/reject workflow
+- [ ] **CEL policy engine** — operation-level classification (read/write/blocked). `PolicyEngine` interface exists for plugging in.
+- [ ] **HITL approval workflow** — policy can flag `approval_required` but there is no approval UI or API
 - [ ] **Runner lifecycle events** — `POST /v1/events/runner` for allocation, release, pause, resume signals
-- [ ] **Approval workflow** — policy can flag `approval_required` but there is no approval UI or API
 - [ ] **Rate limiting** — per-runner, per-tool-family request rate limits
 - [ ] **Metrics endpoint** — Prometheus-compatible `/metrics`
 - [ ] **GCP metadata emulation** — `gatewayIP:80` metadata server for GCP workloads

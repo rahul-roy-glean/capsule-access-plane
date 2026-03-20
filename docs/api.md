@@ -229,7 +229,38 @@ No attestation token required (intended for host-local communication).
 {
   "provider": "github",
   "token": "ghs_installation_token_here",
-  "expires_at": "2026-03-20T11:00:00Z"
+  "expires_at": "2026-03-20T11:00:00Z",
+  "source_ip": "172.16.0.2",
+  "identity": {
+    "user_email": "alice@glean.com",
+    "headers": {
+      "X-Glean-Agent-Session": "sess-123"
+    }
+  }
+}
+```
+
+- `source_ip` (optional): Scopes the token to a specific VM source IP. If
+  omitted, the token is set as the global fallback.
+- `identity` (optional): Identity headers injected into proxied requests.
+  `user_email` sets `X-Glean-User-Email`. `headers` sets arbitrary headers.
+
+**Multi-credential push** (different tokens for different operations on the same domain):
+
+```json
+{
+  "provider": "slack",
+  "source_ip": "172.16.0.2",
+  "token": "default-token",
+  "expires_at": "2026-03-20T11:00:00Z",
+  "credentials": {
+    "read": "xoxb-read-token",
+    "write": "xoxb-write-token"
+  },
+  "rules": [
+    {"methods": ["GET"], "credential_key": "read"},
+    {"methods": ["POST", "PUT"], "credential_key": "write"}
+  ]
 }
 ```
 
@@ -248,6 +279,35 @@ No attestation token required (intended for host-local communication).
 |------|---------|
 | 400 | Missing fields, provider is not a delegated type |
 | 404 | Unknown provider name |
+
+## GET /v1/phantom-env
+
+Returns phantom environment variables needed for CLI tools to bypass local
+credential checks. Called by the host agent at VM boot time to know which
+env vars to inject into the VM.
+
+**Request:**
+
+```bash
+# All families:
+curl http://localhost:8080/v1/phantom-env
+
+# Specific families:
+curl http://localhost:8080/v1/phantom-env?families=gcp_cli_read,kubectl
+```
+
+**Response (200):**
+
+```json
+{
+  "CLOUDSDK_AUTH_ACCESS_TOKEN": "phantom",
+  "CLOUDSDK_CORE_PROJECT": "phantom"
+}
+```
+
+The values are worthless placeholders. They exist only to satisfy CLIs
+that check for credentials locally before making HTTP calls. The CONNECT
+proxy replaces them with real credentials at the network boundary.
 
 ## POST /v1/events/runner
 

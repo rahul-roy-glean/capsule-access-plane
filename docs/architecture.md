@@ -161,7 +161,15 @@ Agent ──► POST /v1/grants/revoke
 
 Validates HMAC-SHA256 signed attestation tokens. Tokens are issued by the
 Capsule control plane and contain runner_id, session_id, workload_key, and
-expiry.
+expiry. Tokens also carry optional identity fields:
+
+- **IdentityMode** — `"user-direct"` (agent acts on behalf of a user) or
+  `"virtual"` (agent has its own persistent identity)
+- **UserEmail** — the human user's email (user-direct mode)
+- **VirtualIdentityID** — the agent's own identity (virtual mode)
+
+`Claims.EffectiveIdentity()` resolves the right identity string for audit
+and policy purposes.
 
 Token format: `base64(json_payload).base64(hmac_signature)`
 
@@ -209,11 +217,18 @@ Manages credential providers. Each provider implements `CredentialProvider`:
 Built-in provider types:
 
 - **static** — wraps `CredentialResolver` (env/literal/stored schemes)
-- **delegated** — accepts externally-pushed tokens via `UpdateToken()`
+- **delegated** — accepts externally-pushed tokens via `UpdateToken()`.
+  Supports session-scoped tokens keyed by source IP, per-user identity headers
+  (`X-Glean-User-Email`, custom headers), and multi-credential routing rules
+  (different tokens for different HTTP methods/paths on the same domain).
+- **gcp-sa** — mints short-lived GCP access tokens by impersonating a service
+  account via the IAM Credentials API (`generateAccessToken`). Background
+  refresh loop keeps the token fresh (refreshes at 75% of lifetime).
 
 The registry supports:
 - Named lookup (`Get`, `ForManifest`) for manifest-driven credential selection
 - Host-based lookup (`ForHost`) for CONNECT proxy credential injection
+- Session-scoped resolution via source IP context for per-user isolation
 - Default provider fallback for backward compatibility
 - JSON config file loading (`PROVIDERS_CONFIG`)
 
@@ -248,12 +263,13 @@ ID.
 
 | Layer | Mechanism |
 |-------|-----------|
-| Identity | HMAC-SHA256 attestation tokens with expiry |
+| Identity | HMAC-SHA256 attestation tokens with user-direct and virtual identity modes |
 | Authorization | Runner context must match token claims |
 | Manifest validation | Destination host + HTTP method + URL path glob allowlist |
 | SSRF protection | DNS resolution + private IP blocking + CIDR allowlists |
-| Policy | Pluggable engine (currently manifest-based) |
-| Credential isolation | Credentials resolved server-side via provider registry |
-| Proxy security | Hop-by-hop header stripping, selective SSL bump |
-| Audit | Every operation logged with full context |
+| Policy | Pluggable engine (currently manifest-based, CEL interface ready) |
+| Credential isolation | Credentials resolved server-side via provider registry, per-session scoping |
+| Multi-credential | Request-level credential selection (method+path rules) for same-domain dual-token scenarios |
+| Proxy security | Hop-by-hop header stripping, selective SSL bump, identity header injection |
+| Audit | Every operation logged with full context + identity mode attribution |
 | Grant scoping | Grants bound to runner_id, time-limited, revocable |
