@@ -19,8 +19,7 @@ func setupTestService(t *testing.T) (*Service, func()) {
 	}
 
 	sqlStore := NewSQLStore(s.DB())
-	creds := NewCredentialResolver(s.DB())
-	svc := NewService(sqlStore, creds, 15*time.Minute)
+	svc := NewService(sqlStore, 15*time.Minute)
 
 	return svc, func() { _ = s.Close() }
 }
@@ -41,7 +40,7 @@ func TestProjectGrant_Success(t *testing.T) {
 	claims := RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}
 
 	t.Setenv("TEST_TOKEN", "test-secret-value")
-	resp, _, err := svc.ProjectGrant(ctx, req, claims, "env:TEST_TOKEN")
+	resp, err := svc.ProjectGrant(ctx, req, claims, "test-secret-value", "default")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -71,7 +70,7 @@ func TestProjectGrant_RunnerMismatch(t *testing.T) {
 	claims := RunnerClaims{RunnerID: "runner-other", SessionID: "session-1"}
 
 	t.Setenv("TEST_TOKEN", "test-secret-value")
-	_, _, err := svc.ProjectGrant(ctx, req, claims, "env:TEST_TOKEN")
+	_, err := svc.ProjectGrant(ctx, req, claims, "test-secret-value", "default")
 	if err == nil {
 		t.Fatal("expected error for runner mismatch")
 	}
@@ -84,12 +83,12 @@ func TestExchangeCapability_Success(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("TEST_TOKEN", "test-secret-value")
 
-	projResp, _, err := svc.ProjectGrant(ctx, &accessplane.ProjectGrantRequest{
+	projResp, err := svc.ProjectGrant(ctx, &accessplane.ProjectGrantRequest{
 		RunnerID:   "runner-1",
 		SessionID:  "session-1",
 		ToolFamily: "github_rest",
 		Lane:       accessplane.LaneDirectHTTP,
-	}, RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}, "env:TEST_TOKEN")
+	}, RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}, "test-secret-value", "default")
 	if err != nil {
 		t.Fatalf("project: %v", err)
 	}
@@ -112,18 +111,17 @@ func TestExchangeCapability_ExpiredGrant(t *testing.T) {
 
 	// Use a service with very short TTL.
 	sqlStore := svc.store
-	creds := svc.credentials
-	shortSvc := NewService(sqlStore, creds, 1*time.Millisecond)
+	shortSvc := NewService(sqlStore, 1*time.Millisecond)
 
 	ctx := context.Background()
 	t.Setenv("TEST_TOKEN", "test-secret-value")
 
-	projResp, _, err := shortSvc.ProjectGrant(ctx, &accessplane.ProjectGrantRequest{
+	projResp, err := shortSvc.ProjectGrant(ctx, &accessplane.ProjectGrantRequest{
 		RunnerID:   "runner-1",
 		SessionID:  "session-1",
 		ToolFamily: "github_rest",
 		Lane:       accessplane.LaneDirectHTTP,
-	}, RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}, "env:TEST_TOKEN")
+	}, RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}, "test-secret-value", "default")
 	if err != nil {
 		t.Fatalf("project: %v", err)
 	}
@@ -147,12 +145,12 @@ func TestExchangeCapability_RevokedGrant(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("TEST_TOKEN", "test-secret-value")
 
-	projResp, _, err := svc.ProjectGrant(ctx, &accessplane.ProjectGrantRequest{
+	projResp, err := svc.ProjectGrant(ctx, &accessplane.ProjectGrantRequest{
 		RunnerID:   "runner-1",
 		SessionID:  "session-1",
 		ToolFamily: "github_rest",
 		Lane:       accessplane.LaneDirectHTTP,
-	}, RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}, "env:TEST_TOKEN")
+	}, RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}, "test-secret-value", "default")
 	if err != nil {
 		t.Fatalf("project: %v", err)
 	}
@@ -183,12 +181,12 @@ func TestRefreshGrant_ExtendsExpiry(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("TEST_TOKEN", "test-secret-value")
 
-	projResp, _, err := svc.ProjectGrant(ctx, &accessplane.ProjectGrantRequest{
+	projResp, err := svc.ProjectGrant(ctx, &accessplane.ProjectGrantRequest{
 		RunnerID:   "runner-1",
 		SessionID:  "session-1",
 		ToolFamily: "github_rest",
 		Lane:       accessplane.LaneDirectHTTP,
-	}, RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}, "env:TEST_TOKEN")
+	}, RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}, "test-secret-value", "default")
 	if err != nil {
 		t.Fatalf("project: %v", err)
 	}
@@ -215,12 +213,12 @@ func TestRevokeGrant_Success(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("TEST_TOKEN", "test-secret-value")
 
-	projResp, _, err := svc.ProjectGrant(ctx, &accessplane.ProjectGrantRequest{
+	projResp, err := svc.ProjectGrant(ctx, &accessplane.ProjectGrantRequest{
 		RunnerID:   "runner-1",
 		SessionID:  "session-1",
 		ToolFamily: "github_rest",
 		Lane:       accessplane.LaneDirectHTTP,
-	}, RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}, "env:TEST_TOKEN")
+	}, RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}, "test-secret-value", "default")
 	if err != nil {
 		t.Fatalf("project: %v", err)
 	}
@@ -244,12 +242,12 @@ func TestRevokeGrant_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("TEST_TOKEN", "test-secret-value")
 
-	projResp, _, err := svc.ProjectGrant(ctx, &accessplane.ProjectGrantRequest{
+	projResp, err := svc.ProjectGrant(ctx, &accessplane.ProjectGrantRequest{
 		RunnerID:   "runner-1",
 		SessionID:  "session-1",
 		ToolFamily: "github_rest",
 		Lane:       accessplane.LaneDirectHTTP,
-	}, RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}, "env:TEST_TOKEN")
+	}, RunnerClaims{RunnerID: "runner-1", SessionID: "session-1"}, "test-secret-value", "default")
 	if err != nil {
 		t.Fatalf("project: %v", err)
 	}

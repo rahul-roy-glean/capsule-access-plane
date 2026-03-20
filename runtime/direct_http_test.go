@@ -83,7 +83,7 @@ func TestProxyInjectsAuthHeader(t *testing.T) {
 		Version:        "1.0",
 		SurfaceKind:    "http",
 		SupportedLanes: []accessplane.Lane{accessplane.LaneDirectHTTP},
-		Destinations:   []manifest.Destination{{Host: "127.0.0.1"}},
+		Destinations:   []manifest.Destination{{Host: "127.0.0.1", AllowedIPs: []string{"127.0.0.0/8"}}},
 		MethodConstraints: []manifest.MethodConstraint{
 			{Method: "GET", PathPattern: "/**"},
 		},

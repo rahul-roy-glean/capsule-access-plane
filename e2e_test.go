@@ -19,6 +19,7 @@ import (
 	"github.com/rahul-roy-glean/capsule-access-plane/identity"
 	"github.com/rahul-roy-glean/capsule-access-plane/manifest"
 	"github.com/rahul-roy-glean/capsule-access-plane/policy"
+	"github.com/rahul-roy-glean/capsule-access-plane/providers"
 	"github.com/rahul-roy-glean/capsule-access-plane/runtime"
 	"github.com/rahul-roy-glean/capsule-access-plane/server"
 	"github.com/rahul-roy-glean/capsule-access-plane/store"
@@ -60,17 +61,21 @@ func e2eServer(t *testing.T) (baseURL string, signToken func(runnerID, sessionID
 
 	// Grant infrastructure
 	t.Setenv("E2E_TOKEN", "e2e-credential-secret-value")
-	credRef := "env:E2E_TOKEN"
 	credResolver := grants.NewCredentialResolver(dataStore.DB())
+	defaultProvider := providers.NewStaticProvider("default", credResolver, "env:E2E_TOKEN", nil)
+	providerRegistry := providers.NewRegistry()
+	providerRegistry.SetDefault(defaultProvider)
+	_ = providerRegistry.Register(defaultProvider)
+
 	grantStore := grants.NewSQLStore(dataStore.DB())
-	grantService := grants.NewService(grantStore, credResolver, 15*time.Minute)
+	grantService := grants.NewService(grantStore, 15*time.Minute)
 	adapter := runtime.NewDirectHTTPAdapter(registry)
 
 	// Handlers
 	logger := slog.Default()
 	resolveHandler := server.NewResolveHandler(verifier, engine, implAvailability, logger)
-	grantHandlers := server.NewGrantHandlers(verifier, grantService, adapter, credRef, logger)
-	executeHandler := server.NewExecuteHandler(verifier, registry, engine, credResolver, credRef, logger)
+	grantHandlers := server.NewGrantHandlers(verifier, grantService, adapter, providerRegistry, registry, logger)
+	executeHandler := server.NewExecuteHandler(verifier, registry, engine, providerRegistry, logger)
 
 	// Mux
 	mux := http.NewServeMux()
@@ -495,7 +500,7 @@ func TestE2E_ProxyForwardsWithAuth(t *testing.T) {
 		Version:        "1.0",
 		SurfaceKind:    "http",
 		SupportedLanes: []accessplane.Lane{accessplane.LaneDirectHTTP},
-		Destinations:   []manifest.Destination{{Host: "127.0.0.1"}},
+		Destinations:   []manifest.Destination{{Host: "127.0.0.1", AllowedIPs: []string{"127.0.0.0/8"}}},
 		MethodConstraints: []manifest.MethodConstraint{
 			{Method: "GET", PathPattern: "/**"},
 			{Method: "POST", PathPattern: "/**"},
@@ -684,7 +689,7 @@ func TestE2E_ExecuteHTTP_SuccessWithMockTarget(t *testing.T) {
 		Version:        "1.0",
 		SurfaceKind:    "http",
 		SupportedLanes: []accessplane.Lane{accessplane.LaneRemoteExecution},
-		Destinations:   []manifest.Destination{{Host: "127.0.0.1"}},
+		Destinations:   []manifest.Destination{{Host: "127.0.0.1", AllowedIPs: []string{"127.0.0.0/8"}}},
 		MethodConstraints: []manifest.MethodConstraint{
 			{Method: "GET", PathPattern: "/**"},
 			{Method: "POST", PathPattern: "/**"},
@@ -703,7 +708,12 @@ func TestE2E_ExecuteHTTP_SuccessWithMockTarget(t *testing.T) {
 	credResolver := grants.NewCredentialResolver(dataStore.DB())
 	logger := slog.Default()
 
-	executeHandler := server.NewExecuteHandler(verifier, registry, engine, credResolver, "env:E2E_EXEC_TOKEN", logger)
+	defaultProvider := providers.NewStaticProvider("default", credResolver, "env:E2E_EXEC_TOKEN", nil)
+	providerRegistry := providers.NewRegistry()
+	providerRegistry.SetDefault(defaultProvider)
+	_ = providerRegistry.Register(defaultProvider)
+
+	executeHandler := server.NewExecuteHandler(verifier, registry, engine, providerRegistry, logger)
 
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/execute/http", executeHandler)

@@ -1,0 +1,15 @@
+[
+  {
+    "name": "github",
+    "type": "delegated",
+    "hosts": ["api.github.com", "github.com"]
+  },
+  {
+    "name": "internal",
+    "type": "static",
+    "hosts": ["api.internal.corp"],
+    "config": {
+      "credential_ref": "env:INTERNAL_TOKEN"
+    }
+  }
+]

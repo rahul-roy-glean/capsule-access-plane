@@ -12,16 +12,19 @@ import (
 	"github.com/rahul-roy-glean/capsule-access-plane/bundle"
 	"github.com/rahul-roy-glean/capsule-access-plane/grants"
 	"github.com/rahul-roy-glean/capsule-access-plane/identity"
+	"github.com/rahul-roy-glean/capsule-access-plane/manifest"
+	"github.com/rahul-roy-glean/capsule-access-plane/providers"
 	"github.com/rahul-roy-glean/capsule-access-plane/runtime"
 )
 
 // GrantHandlers implements the grant lifecycle HTTP endpoints.
 type GrantHandlers struct {
-	verifier      identity.Verifier
-	grants        *grants.Service
-	adapter       *runtime.DirectHTTPAdapter
-	credentialRef string
-	logger        *slog.Logger
+	verifier        identity.Verifier
+	grants          *grants.Service
+	adapter         *runtime.DirectHTTPAdapter
+	providers       *providers.Registry
+	manifestRegistry manifest.Registry
+	logger          *slog.Logger
 }
 
 // NewGrantHandlers creates handlers for the grant lifecycle endpoints.
@@ -29,15 +32,17 @@ func NewGrantHandlers(
 	verifier identity.Verifier,
 	grantSvc *grants.Service,
 	adapter *runtime.DirectHTTPAdapter,
-	credentialRef string,
+	providerRegistry *providers.Registry,
+	manifestRegistry manifest.Registry,
 	logger *slog.Logger,
 ) *GrantHandlers {
 	return &GrantHandlers{
-		verifier:      verifier,
-		grants:        grantSvc,
-		adapter:       adapter,
-		credentialRef: credentialRef,
-		logger:        logger,
+		verifier:        verifier,
+		grants:          grantSvc,
+		adapter:         adapter,
+		providers:       providerRegistry,
+		manifestRegistry: manifestRegistry,
+		logger:          logger,
 	}
 }
 
@@ -68,7 +73,28 @@ func (h *GrantHandlers) ProjectGrant(w http.ResponseWriter, r *http.Request) {
 		SessionID: claims.SessionID,
 	}
 
-	resp, resolvedToken, err := h.grants.ProjectGrant(r.Context(), &req, runnerClaims, h.credentialRef)
+	// Resolve credential via provider registry.
+	// Look up the manifest to find the named provider, if any.
+	var providerName string
+	if m, err := h.manifestRegistry.Get(req.ToolFamily); err == nil {
+		providerName = m.Provider
+	}
+	provider, err := h.providers.ForManifest(providerName)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "credential provider unavailable: " + err.Error(),
+		})
+		return
+	}
+	resolvedToken, err := provider.ResolveToken(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "credential resolution failed: " + err.Error(),
+		})
+		return
+	}
+
+	resp, err := h.grants.ProjectGrant(r.Context(), &req, runnerClaims, resolvedToken, provider.Name())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": err.Error(),

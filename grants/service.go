@@ -11,32 +11,25 @@ import (
 
 // Service implements the grant lifecycle: project, exchange, refresh, revoke.
 type Service struct {
-	store       GrantStore
-	credentials *CredentialResolver
-	defaultTTL  time.Duration
+	store      GrantStore
+	defaultTTL time.Duration
 }
 
-// NewService creates a grant service with the given store, credential resolver, and default TTL.
-func NewService(store GrantStore, credentials *CredentialResolver, defaultTTL time.Duration) *Service {
+// NewService creates a grant service with the given store and default TTL.
+func NewService(store GrantStore, defaultTTL time.Duration) *Service {
 	return &Service{
-		store:       store,
-		credentials: credentials,
-		defaultTTL:  defaultTTL,
+		store:      store,
+		defaultTTL: defaultTTL,
 	}
 }
 
 // ProjectGrant creates a new grant for a tool operation.
-// Returns the grant response and the resolved credential token (for adapter use).
-func (s *Service) ProjectGrant(ctx context.Context, req *accessplane.ProjectGrantRequest, claims RunnerClaims, credentialRef string) (*accessplane.ProjectGrantResponse, string, error) {
+// The resolvedToken is the pre-resolved credential value (for adapter use).
+// The providerName is stored in the grant record for refresh/audit purposes.
+func (s *Service) ProjectGrant(ctx context.Context, req *accessplane.ProjectGrantRequest, claims RunnerClaims, resolvedToken string, providerName string) (*accessplane.ProjectGrantResponse, error) {
 	// Validate runner identity.
 	if req.RunnerID != claims.RunnerID {
-		return nil, "", fmt.Errorf("grants: runner_id mismatch: request=%s token=%s", req.RunnerID, claims.RunnerID)
-	}
-
-	// Resolve credential to verify it's available.
-	resolvedToken, err := s.credentials.Resolve(ctx, credentialRef)
-	if err != nil {
-		return nil, "", fmt.Errorf("grants: credential unavailable: %w", err)
+		return nil, fmt.Errorf("grants: runner_id mismatch: request=%s token=%s", req.RunnerID, claims.RunnerID)
 	}
 
 	now := time.Now().UTC()
@@ -53,21 +46,21 @@ func (s *Service) ProjectGrant(ctx context.Context, req *accessplane.ProjectGran
 		RunnerID:            req.RunnerID,
 		TurnID:              req.TurnID,
 		ImplementationState: accessplane.StateImplemented,
-		CredentialRef:       credentialRef,
+		CredentialRef:       providerName,
 		ExpiresAt:           now.Add(s.defaultTTL),
 		CreatedAt:           now,
 		UpdatedAt:           now,
 	}
 
 	if err := s.store.InsertGrant(ctx, g); err != nil {
-		return nil, "", fmt.Errorf("grants: insert: %w", err)
+		return nil, fmt.Errorf("grants: insert: %w", err)
 	}
 
 	return &accessplane.ProjectGrantResponse{
 		GrantID:       grantID,
 		ProjectionRef: "proj-" + grantID,
 		Status:        "projected",
-	}, resolvedToken, nil
+	}, nil
 }
 
 // ExchangeCapability validates that a grant is active and usable.

@@ -14,6 +14,7 @@ import (
 	"github.com/rahul-roy-glean/capsule-access-plane/grants"
 	"github.com/rahul-roy-glean/capsule-access-plane/identity"
 	"github.com/rahul-roy-glean/capsule-access-plane/manifest"
+	"github.com/rahul-roy-glean/capsule-access-plane/providers"
 	"github.com/rahul-roy-glean/capsule-access-plane/runtime"
 	"github.com/rahul-roy-glean/capsule-access-plane/store"
 )
@@ -33,8 +34,7 @@ func setupGrantHandlers(t *testing.T) (*GrantHandlers, *identity.HMACVerifier, f
 	}
 
 	sqlStore := grants.NewSQLStore(s.DB())
-	creds := grants.NewCredentialResolver(s.DB())
-	grantSvc := grants.NewService(sqlStore, creds, 15*time.Minute)
+	grantSvc := grants.NewService(sqlStore, 15*time.Minute)
 
 	reg := manifest.NewInMemoryRegistry()
 	loader := &manifest.YAMLLoader{}
@@ -45,7 +45,13 @@ func setupGrantHandlers(t *testing.T) (*GrantHandlers, *identity.HMACVerifier, f
 
 	t.Setenv("TEST_GRANT_TOKEN", "test-credential-value")
 
-	handlers := NewGrantHandlers(verifier, grantSvc, adapter, "env:TEST_GRANT_TOKEN", slog.Default())
+	credResolver := grants.NewCredentialResolver(s.DB())
+	defaultProvider := providers.NewStaticProvider("default", credResolver, "env:TEST_GRANT_TOKEN", nil)
+	providerRegistry := providers.NewRegistry()
+	providerRegistry.SetDefault(defaultProvider)
+	_ = providerRegistry.Register(defaultProvider)
+
+	handlers := NewGrantHandlers(verifier, grantSvc, adapter, providerRegistry, reg, slog.Default())
 	return handlers, verifier, func() { _ = s.Close() }
 }
 

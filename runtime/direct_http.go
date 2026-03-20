@@ -72,6 +72,7 @@ func (a *DirectHTTPAdapter) InstallGrantWithCredential(ctx context.Context, b *b
 	handler := &proxyHandler{
 		credential:        credential,
 		allowedHosts:      manifest.BuildAllowedHosts(m.Destinations),
+		destinations:      m.Destinations,
 		methodConstraints: m.MethodConstraints,
 	}
 
@@ -153,6 +154,7 @@ func (a *DirectHTTPAdapter) ProxyAddr(grantID string) string {
 type proxyHandler struct {
 	credential        string
 	allowedHosts      map[string]bool
+	destinations      []manifest.Destination
 	methodConstraints []manifest.MethodConstraint
 }
 
@@ -179,10 +181,23 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate method constraints if any are defined.
+	// SSRF protection — reject private/loopback IPs.
+	dest := manifest.FindDestination(h.destinations, targetHost)
+	var allowedCIDRs []string
+	if dest != nil {
+		allowedCIDRs = dest.AllowedIPs
+	}
+	if err := manifest.CheckSSRF(targetHost, allowedCIDRs); err != nil {
+		http.Error(w, "SSRF: "+err.Error(), http.StatusForbidden)
+		return
+	}
+
+	// Validate method and path constraints.
 	if len(h.methodConstraints) > 0 {
-		if !manifest.IsMethodAllowed(r.Method, h.methodConstraints) {
-			http.Error(w, fmt.Sprintf("method %s not allowed by manifest", r.Method), http.StatusMethodNotAllowed)
+		targetPath := manifest.ExtractPath(targetURL)
+		check := manifest.IsRequestAllowed(r.Method, targetPath, h.methodConstraints)
+		if !check.Allowed {
+			http.Error(w, check.Reason, http.StatusMethodNotAllowed)
 			return
 		}
 	}
@@ -194,9 +209,9 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Copy headers from original request.
+	// Copy headers from original request, skipping hop-by-hop headers.
 	for k, vv := range r.Header {
-		if strings.EqualFold(k, "X-Target-URL") {
+		if isHopByHop(k) || strings.EqualFold(k, "X-Target-URL") {
 			continue
 		}
 		for _, v := range vv {
@@ -224,4 +239,20 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// hopByHopHeaders are HTTP headers that must not be forwarded by proxies.
+var hopByHopHeaders = map[string]bool{
+	"Connection":          true,
+	"Keep-Alive":          true,
+	"Proxy-Authenticate":  true,
+	"Proxy-Authorization": true,
+	"Te":                  true,
+	"Trailer":             true,
+	"Transfer-Encoding":   true,
+	"Upgrade":             true,
+}
+
+func isHopByHop(header string) bool {
+	return hopByHopHeaders[http.CanonicalHeaderKey(header)]
 }

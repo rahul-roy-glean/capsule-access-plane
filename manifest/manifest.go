@@ -13,6 +13,7 @@ type ToolManifest struct {
 	AuthPatterns      []string                    `json:"auth_patterns,omitempty" yaml:"auth_patterns,omitempty"`
 	Destinations      []Destination               `json:"destinations,omitempty" yaml:"destinations,omitempty"`
 	MethodConstraints []MethodConstraint          `json:"method_constraints,omitempty" yaml:"method_constraints,omitempty"`
+	Provider          string                      `json:"provider,omitempty" yaml:"provider,omitempty"`
 	ExecutionHints    map[string]string           `json:"execution_hints,omitempty" yaml:"execution_hints,omitempty"`
 	ApprovalHints     map[string]string           `json:"approval_hints,omitempty" yaml:"approval_hints,omitempty"`
 	HelperSupport     *HelperSupport              `json:"helper_support,omitempty" yaml:"helper_support,omitempty"`
@@ -28,15 +29,17 @@ type LogicalAction struct {
 
 // Destination describes a remote endpoint a tool communicates with.
 type Destination struct {
-	Host     string `json:"host" yaml:"host"`
-	Port     int    `json:"port,omitempty" yaml:"port,omitempty"`
-	Protocol string `json:"protocol,omitempty" yaml:"protocol,omitempty"`
+	Host       string   `json:"host" yaml:"host"`
+	Port       int      `json:"port,omitempty" yaml:"port,omitempty"`
+	Protocol   string   `json:"protocol,omitempty" yaml:"protocol,omitempty"`
+	AllowedIPs []string `json:"allowed_ips,omitempty" yaml:"allowed_ips,omitempty"`
 }
 
 // MethodConstraint restricts the HTTP methods and paths a tool may use.
 type MethodConstraint struct {
 	Method      string `json:"method" yaml:"method"`
 	PathPattern string `json:"path_pattern" yaml:"path_pattern"`
+	Enforcement string `json:"enforcement,omitempty" yaml:"enforcement,omitempty"` // "enforce" (default) or "audit"
 }
 
 // HelperSupport describes the credential helper integration for a tool.

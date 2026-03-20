@@ -1,0 +1,12 @@
+[
+  {
+    "name": "github",
+    "type": "delegated",
+    "hosts": ["api.github.com", "github.com"]
+  },
+  {
+    "name": "gcp",
+    "type": "delegated",
+    "hosts": ["storage.googleapis.com", "compute.googleapis.com"]
+  }
+]

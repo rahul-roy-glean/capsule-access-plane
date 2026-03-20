@@ -11,22 +11,21 @@ import (
 
 	"github.com/rahul-roy-glean/capsule-access-plane/accessplane"
 	"github.com/rahul-roy-glean/capsule-access-plane/audit"
-	"github.com/rahul-roy-glean/capsule-access-plane/grants"
 	"github.com/rahul-roy-glean/capsule-access-plane/identity"
 	"github.com/rahul-roy-glean/capsule-access-plane/manifest"
 	"github.com/rahul-roy-glean/capsule-access-plane/policy"
+	"github.com/rahul-roy-glean/capsule-access-plane/providers"
 )
 
 const maxResponseBody = 10 << 20 // 10 MB
 
 // ExecuteHandler implements the POST /v1/execute/http endpoint.
 type ExecuteHandler struct {
-	verifier      identity.Verifier
-	registry      manifest.Registry
-	engine        policy.PolicyEngine
-	credResolver  *grants.CredentialResolver
-	credentialRef string
-	logger        *slog.Logger
+	verifier  identity.Verifier
+	registry  manifest.Registry
+	engine    policy.PolicyEngine
+	providers *providers.Registry
+	logger    *slog.Logger
 }
 
 // NewExecuteHandler creates a handler for the remote broker execution endpoint.
@@ -34,17 +33,15 @@ func NewExecuteHandler(
 	verifier identity.Verifier,
 	registry manifest.Registry,
 	engine policy.PolicyEngine,
-	credResolver *grants.CredentialResolver,
-	credentialRef string,
+	providerRegistry *providers.Registry,
 	logger *slog.Logger,
 ) *ExecuteHandler {
 	return &ExecuteHandler{
-		verifier:      verifier,
-		registry:      registry,
-		engine:        engine,
-		credResolver:  credResolver,
-		credentialRef: credentialRef,
-		logger:        logger,
+		verifier:  verifier,
+		registry:  registry,
+		engine:    engine,
+		providers: providerRegistry,
+		logger:    logger,
 	}
 }
 
@@ -101,13 +98,32 @@ func (h *ExecuteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 6: Validate method constraints
+	// Step 5b: SSRF protection — reject private/loopback IPs
+	dest := manifest.FindDestination(m.Destinations, targetHost)
+	var allowedCIDRs []string
+	if dest != nil {
+		allowedCIDRs = dest.AllowedIPs
+	}
+	if err := manifest.CheckSSRF(targetHost, allowedCIDRs); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "SSRF: " + err.Error(),
+		})
+		return
+	}
+
+	// Step 6: Validate method and path constraints
 	if len(m.MethodConstraints) > 0 {
-		if !manifest.IsMethodAllowed(req.Method, m.MethodConstraints) {
+		targetPath := manifest.ExtractPath(req.URL)
+		check := manifest.IsRequestAllowed(req.Method, targetPath, m.MethodConstraints)
+		if !check.Allowed {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
-				"error": fmt.Sprintf("method %s not allowed by manifest", req.Method),
+				"error": check.Reason,
 			})
 			return
+		}
+		if check.Audit {
+			h.logger.Warn("request allowed in audit mode",
+				"method", req.Method, "path", targetPath, "tool_family", req.ToolFamily)
 		}
 	}
 
@@ -130,8 +146,16 @@ func (h *ExecuteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 8: Resolve credential
-	credential, err := h.credResolver.Resolve(r.Context(), h.credentialRef)
+	// Step 8: Resolve credential via provider
+	provider, err := h.providers.ForManifest(m.Provider)
+	if err != nil {
+		h.logger.Error("provider lookup failed", "err", err, "provider", m.Provider)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "credential provider unavailable",
+		})
+		return
+	}
+	credential, err := provider.ResolveToken(r.Context())
 	if err != nil {
 		h.logger.Error("credential resolution failed", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{

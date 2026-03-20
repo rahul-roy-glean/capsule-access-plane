@@ -1,0 +1,7 @@
+[
+  {
+    "name": "github",
+    "type": "delegated",
+    "hosts": ["api.github.com", "github.com"]
+  }
+]

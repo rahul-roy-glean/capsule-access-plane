@@ -53,3 +53,16 @@ func LogGrantOperation(logger *slog.Logger, operation string, event AuditEvent) 
 		"runtime_correlation", event.RuntimeCorrelation,
 	)
 }
+
+// LogProxyOperation emits a structured log record for a proxy (CONNECT/SSL bump) event.
+func LogProxyOperation(logger *slog.Logger, event AuditEvent) {
+	logger.Info("proxy_operation",
+		"session_id", event.SessionID,
+		"runner_id", event.RunnerID,
+		"tool_family", event.ToolFamily,
+		"target", event.Target,
+		"result", event.Result,
+		"reason_code", event.ReasonCode,
+		"duration", event.Duration,
+	)
+}

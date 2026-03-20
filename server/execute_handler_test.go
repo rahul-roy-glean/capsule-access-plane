@@ -14,6 +14,7 @@ import (
 	"github.com/rahul-roy-glean/capsule-access-plane/identity"
 	"github.com/rahul-roy-glean/capsule-access-plane/manifest"
 	"github.com/rahul-roy-glean/capsule-access-plane/policy"
+	"github.com/rahul-roy-glean/capsule-access-plane/providers"
 	"github.com/rahul-roy-glean/capsule-access-plane/store"
 )
 
@@ -36,7 +37,12 @@ func setupExecuteHandler(t *testing.T, reg manifest.Registry) (*ExecuteHandler, 
 
 	t.Setenv("TEST_EXEC_TOKEN", "test-exec-credential")
 
-	handler := NewExecuteHandler(verifier, reg, engine, credResolver, "env:TEST_EXEC_TOKEN", slog.Default())
+	defaultProvider := providers.NewStaticProvider("default", credResolver, "env:TEST_EXEC_TOKEN", nil)
+	providerRegistry := providers.NewRegistry()
+	providerRegistry.SetDefault(defaultProvider)
+	_ = providerRegistry.Register(defaultProvider)
+
+	handler := NewExecuteHandler(verifier, reg, engine, providerRegistry, slog.Default())
 	return handler, func() { _ = s.Close() }
 }
 
@@ -48,7 +54,7 @@ func execTestRegistry(t *testing.T) manifest.Registry {
 		Version:        "1.0",
 		SurfaceKind:    "http",
 		SupportedLanes: []accessplane.Lane{accessplane.LaneRemoteExecution},
-		Destinations:   []manifest.Destination{{Host: "127.0.0.1"}},
+		Destinations:   []manifest.Destination{{Host: "127.0.0.1", AllowedIPs: []string{"127.0.0.0/8"}}},
 		MethodConstraints: []manifest.MethodConstraint{
 			{Method: "GET", PathPattern: "/**"},
 			{Method: "POST", PathPattern: "/**"},
@@ -251,7 +257,7 @@ func TestExecuteHTTP_PolicyDenied(t *testing.T) {
 		Version:        "1.0",
 		SurfaceKind:    "http",
 		SupportedLanes: []accessplane.Lane{},
-		Destinations:   []manifest.Destination{{Host: "127.0.0.1"}},
+		Destinations:   []manifest.Destination{{Host: "127.0.0.1", AllowedIPs: []string{"127.0.0.0/8"}}},
 	})
 
 	handler, cleanup := setupExecuteHandler(t, reg)
