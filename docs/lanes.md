@@ -12,8 +12,8 @@ agent can see, and what level of control the access plane retains.
                      │ Remote Execution │ Direct HTTP        │ Helper Session   │
                      │ (Lane 1)         │ (Lane 2)           │ (Lane 3)         │
 ┌────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Credential visible │ No               │ No (CONNECT proxy) │ In helper only   │
-│ to agent?          │                  │ In transit (grant)  │                  │
+│ Credential visible │ No               │ No — injected on   │ In helper only   │
+│ to agent?          │                  │ outbound leg only  │                  │
 ├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
 │ Agent makes own    │ No               │ Yes (HTTPS_PROXY    │ Yes (via CLI)    │
 │ HTTP calls?        │                  │  or grant proxy)    │                  │
