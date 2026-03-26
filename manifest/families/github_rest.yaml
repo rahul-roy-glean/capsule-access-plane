@@ -19,6 +19,8 @@ preferred_lane:
 auth_patterns:
   - bearer_token
   - github_app
+phantom_env:
+  GH_TOKEN: phantom
 destinations:
   - host: api.github.com
     port: 443
@@ -27,6 +29,16 @@ method_constraints:
   - method: GET
     path_pattern: "/repos/**"
   - method: POST
-    path_pattern: "/repos/*/issues"
+    path_pattern: "/repos/**"
   - method: PUT
-    path_pattern: "/repos/*/pulls/*/merge"
+    path_pattern: "/repos/**"
+  - method: PATCH
+    path_pattern: "/repos/**"
+  - method: DELETE
+    path_pattern: "/repos/**"
+  - method: POST
+    path_pattern: "/graphql"
+  - method: GET
+    path_pattern: "/user"
+  - method: GET
+    path_pattern: "/user/**"

@@ -17,6 +17,9 @@ type fakeProvider struct {
 func (p *fakeProvider) Name() string { return p.name }
 func (p *fakeProvider) Type() string { return p.typ }
 func (p *fakeProvider) Matches(host string) bool {
+	if len(p.hosts) == 0 {
+		return true
+	}
 	for _, h := range p.hosts {
 		if h == host {
 			return true
@@ -122,6 +125,51 @@ func TestRegistry_ForHost(t *testing.T) {
 	_, ok = reg.ForHost("evil.example.com")
 	if ok {
 		t.Error("expected no match for evil.example.com")
+	}
+}
+
+func TestRegistry_ForHost_SpecificBeatsDefault(t *testing.T) {
+	reg := NewRegistry()
+	catchAll := &fakeProvider{name: "catch-all", typ: "static", token: "tok-default"}
+	specific := &fakeProvider{name: "github", typ: "static", hosts: []string{"api.github.com"}, token: "tok-gh"}
+	_ = reg.Register(catchAll)
+	_ = reg.Register(specific)
+	reg.SetDefault(catchAll)
+
+	got, ok := reg.ForHost("api.github.com")
+	if !ok {
+		t.Fatal("expected match for api.github.com")
+	}
+	if got.Name() != "github" {
+		t.Errorf("name = %q, want github", got.Name())
+	}
+}
+
+func TestRegistry_ForHost_DefaultFallback(t *testing.T) {
+	reg := NewRegistry()
+	catchAll := &fakeProvider{name: "catch-all", typ: "static", token: "tok-default"}
+	specific := &fakeProvider{name: "github", typ: "static", hosts: []string{"api.github.com"}, token: "tok-gh"}
+	_ = reg.Register(catchAll)
+	_ = reg.Register(specific)
+	reg.SetDefault(catchAll)
+
+	got, ok := reg.ForHost("some-other-host.com")
+	if !ok {
+		t.Fatal("expected catch-all match for some-other-host.com")
+	}
+	if got.Name() != "catch-all" {
+		t.Errorf("name = %q, want catch-all", got.Name())
+	}
+}
+
+func TestRegistry_ForHost_NoDefaultNoMatch(t *testing.T) {
+	reg := NewRegistry()
+	specific := &fakeProvider{name: "github", typ: "static", hosts: []string{"api.github.com"}}
+	_ = reg.Register(specific)
+
+	_, ok := reg.ForHost("unknown.com")
+	if ok {
+		t.Error("expected no match when no default and host doesn't match")
 	}
 }
 
