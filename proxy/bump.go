@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"math/big"
 	"net"
@@ -117,6 +118,11 @@ func (ca *CertAuthority) CACertPool() *x509.CertPool {
 	pool := x509.NewCertPool()
 	pool.AddCert(ca.Cert)
 	return pool
+}
+
+// CACertPEM returns the CA certificate encoded as PEM.
+func (ca *CertAuthority) CACertPEM() []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Cert.Raw})
 }
 
 func (ca *CertAuthority) generateLeaf(hostname string) (*tls.Certificate, error) {
