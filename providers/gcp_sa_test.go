@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -101,6 +102,31 @@ func TestGCPServiceAccountProvider_IAMError(t *testing.T) {
 	err := p.Start(context.Background())
 	if err == nil {
 		t.Fatal("expected error for IAM 403")
+	}
+}
+
+func TestGCPServiceAccountProvider_GenerateIDToken(t *testing.T) {
+	iamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "generateIdToken") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"token": "eyJhbGciOiJSUzI1NiJ9.mock-id-token",
+		})
+	}))
+	defer iamServer.Close()
+
+	p := NewGCPServiceAccountProvider("gcp", "test@proj.iam", nil, nil)
+	p.HTTPClient = &http.Client{Transport: &mockIAMTransport{target: iamServer.URL}}
+
+	idToken, err := p.GenerateIDToken(context.Background(), "https://mcp.example.com", true)
+	if err != nil {
+		t.Fatalf("GenerateIDToken: %v", err)
+	}
+	if idToken != "eyJhbGciOiJSUzI1NiJ9.mock-id-token" {
+		t.Errorf("token = %q", idToken)
 	}
 }
 

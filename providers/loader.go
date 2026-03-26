@@ -60,6 +60,21 @@ func buildProvider(cfg ProviderConfig, credResolver *grants.CredentialResolver) 
 		}
 		return NewGCPServiceAccountProvider(cfg.Name, sa, scopes, cfg.Hosts), nil
 
+	case "oauth-jwt-bearer":
+		sa := cfg.Config["service_account"]
+		if sa == "" {
+			return nil, fmt.Errorf("oauth-jwt-bearer provider requires config.service_account")
+		}
+		audience := cfg.Config["audience"]
+		if audience == "" {
+			return nil, fmt.Errorf("oauth-jwt-bearer provider requires config.audience")
+		}
+		tokenEndpoint := cfg.Config["token_endpoint"]
+		if tokenEndpoint == "" {
+			return nil, fmt.Errorf("oauth-jwt-bearer provider requires config.token_endpoint")
+		}
+		return NewOAuthJWTBearerProvider(cfg.Name, sa, audience, tokenEndpoint, cfg.Hosts), nil
+
 	default:
 		return nil, fmt.Errorf("unknown provider type %q", cfg.Type)
 	}

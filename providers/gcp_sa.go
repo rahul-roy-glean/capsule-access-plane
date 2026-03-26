@@ -188,3 +188,45 @@ func (p *GCPServiceAccountProvider) formatScopes() string {
 	}
 	return strings.Join(quoted, ",")
 }
+
+// GenerateIDToken calls the IAM Credentials API to mint a Google-signed OIDC
+// identity token (JWT) for the given audience. This is different from
+// generateAccessToken — the result is a JWT that can be used as an assertion
+// in OAuth token exchange flows (e.g., JWT bearer grant).
+func (p *GCPServiceAccountProvider) GenerateIDToken(ctx context.Context, audience string, includeEmail bool) (string, error) {
+	url := fmt.Sprintf(
+		"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/%s:generateIdToken",
+		p.serviceAccount,
+	)
+
+	body := fmt.Sprintf(`{"audience":%q,"includeEmail":%t}`, audience, includeEmail)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("gcp-sa: create id token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := p.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gcp-sa: generateIdToken call: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("gcp-sa: generateIdToken returned %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("gcp-sa: decode id token response: %w", err)
+	}
+
+	return result.Token, nil
+}
