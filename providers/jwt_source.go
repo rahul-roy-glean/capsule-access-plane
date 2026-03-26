@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,8 +43,15 @@ type LocalKeySource struct {
 func (s *LocalKeySource) MintJWT(_ context.Context) (string, error) {
 	now := time.Now()
 	header := map[string]string{"alg": "RS256", "typ": "JWT"}
+
+	// GitHub requires "iss" as an integer. Parse if numeric, otherwise use string.
+	var issuer any = s.Issuer
+	if n, err := strconv.ParseInt(s.Issuer, 10, 64); err == nil {
+		issuer = n
+	}
+
 	claims := map[string]any{
-		"iss": s.Issuer,
+		"iss": issuer,
 		"iat": now.Unix(),
 		"exp": now.Add(10 * time.Minute).Unix(),
 	}
