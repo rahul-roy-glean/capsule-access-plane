@@ -6,28 +6,27 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
 )
 
-// OAuthJWTBearerProvider chains GCP identity token minting with OAuth JWT
-// bearer exchange to produce access tokens for MCP servers (or any OAuth
-// resource server that accepts JWT bearer assertions).
+// OAuthJWTBearerProvider produces access tokens by minting a JWT (via a
+// JWTSource) and exchanging it (via a TokenExchanger). It caches the
+// resulting token and refreshes it before expiry.
 //
-// Flow:
-//  1. Call IAM generateIdToken to get a Google-signed OIDC JWT for the target audience
-//  2. POST to the target's /oauth/token with grant_type=jwt-bearer, assertion=<jwt>
-//  3. Cache the resulting access token, refresh before expiry
+// Two configurations:
+//
+//	jwt_source=gcp-iam (default): GCP IAM generateIdToken → OAuth form-post exchange
+//	jwt_source=local-key:         Local RSA key signing → configurable exchange style
 type OAuthJWTBearerProvider struct {
-	name           string
-	hosts          map[string]bool
-	serviceAccount string
-	audience       string // target audience for the identity token
-	tokenEndpoint  string // target's OAuth token exchange endpoint
+	name  string
+	hosts map[string]bool
 
-	// HTTPClient for both IAM and exchange calls. If nil, http.DefaultClient.
+	jwtSource JWTSource
+	exchanger TokenExchanger
+
+	// HTTPClient for exchange calls. If nil, http.DefaultClient.
 	HTTPClient *http.Client
 
 	mu        sync.RWMutex
@@ -36,18 +35,51 @@ type OAuthJWTBearerProvider struct {
 	cancel    context.CancelFunc
 }
 
-// NewOAuthJWTBearerProvider creates a composite provider.
+// NewOAuthJWTBearerProvider creates a provider with GCP IAM JWT source and
+// form-post exchange (backward compatible).
 func NewOAuthJWTBearerProvider(name, serviceAccount, audience, tokenEndpoint string, hosts []string) *OAuthJWTBearerProvider {
+	p := newProvider(name, hosts, nil, &FormPostExchanger{TokenEndpoint: tokenEndpoint})
+	// Lazy-init: JWTSource uses the provider's HTTPClient if set, falling back to GCP ADC.
+	p.jwtSource = &GCPIAMSource{
+		ServiceAccount: serviceAccount,
+		Audience:       audience,
+		HTTPClientFunc: func(ctx context.Context) HTTPClient {
+			if p.HTTPClient != nil {
+				return p.HTTPClient
+			}
+			c, err := gcpAuthenticatedClient(ctx)
+			if err != nil {
+				return http.DefaultClient
+			}
+			return c
+		},
+	}
+	return p
+}
+
+// NewLocalKeyProvider creates a provider that signs JWTs with a local RSA key
+// and exchanges them via Bearer header (e.g. GitHub App installation tokens).
+func NewLocalKeyProvider(name, issuer, tokenEndpoint string, privateKey string, hosts []string) (*OAuthJWTBearerProvider, error) {
+	key, err := ParseRSAPrivateKey(privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("local-key: %w", err)
+	}
+	return newProvider(name, hosts,
+		&LocalKeySource{Issuer: issuer, PrivateKey: key},
+		&BearerHeaderExchanger{TokenEndpoint: tokenEndpoint},
+	), nil
+}
+
+func newProvider(name string, hosts []string, source JWTSource, exchanger TokenExchanger) *OAuthJWTBearerProvider {
 	hostSet := make(map[string]bool, len(hosts))
 	for _, h := range hosts {
 		hostSet[h] = true
 	}
 	return &OAuthJWTBearerProvider{
-		name:           name,
-		hosts:          hostSet,
-		serviceAccount: serviceAccount,
-		audience:       audience,
-		tokenEndpoint:  tokenEndpoint,
+		name:      name,
+		hosts:     hostSet,
+		jwtSource: source,
+		exchanger: exchanger,
 	}
 }
 
@@ -123,46 +155,36 @@ func (p *OAuthJWTBearerProvider) refreshLoop(ctx context.Context) {
 }
 
 func (p *OAuthJWTBearerProvider) refresh(ctx context.Context) error {
-	// Step 1: Mint GCP identity token (requires GCP-authenticated client).
-	iamClient := p.HTTPClient
-	if iamClient == nil {
-		var err error
-		iamClient, err = gcpAuthenticatedClient(ctx)
-		if err != nil {
-			return fmt.Errorf("gcp auth for IAM: %w", err)
-		}
-	}
-	idToken, err := p.generateIDToken(ctx, iamClient)
+	jwt, err := p.jwtSource.MintJWT(ctx)
 	if err != nil {
-		return fmt.Errorf("mint id token: %w", err)
+		return fmt.Errorf("mint jwt: %w", err)
 	}
 
-	// Step 2: Exchange for access token (public OAuth endpoint, no GCP auth needed).
-	exchangeClient := p.HTTPClient
-	if exchangeClient == nil {
-		exchangeClient = http.DefaultClient
+	client := HTTPClient(http.DefaultClient)
+	if p.HTTPClient != nil {
+		client = p.HTTPClient
 	}
-	accessToken, expiresIn, err := p.exchangeJWTBearer(ctx, exchangeClient, idToken)
+	accessToken, expiresIn, err := p.exchanger.Exchange(ctx, client, jwt)
 	if err != nil {
-		return fmt.Errorf("jwt bearer exchange: %w", err)
+		return fmt.Errorf("token exchange: %w", err)
 	}
-
-	expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.token = accessToken
-	p.expiresAt = expiresAt
+	p.expiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second)
 	return nil
 }
 
-func (p *OAuthJWTBearerProvider) generateIDToken(ctx context.Context, client *http.Client) (string, error) {
+// generateIDToken calls GCP IAM to mint an OIDC identity token.
+// Extracted as a package-level function for use by GCPIAMSource.
+func generateIDToken(ctx context.Context, client HTTPClient, serviceAccount, audience string) (string, error) {
 	iamURL := fmt.Sprintf(
 		"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/%s:generateIdToken",
-		p.serviceAccount,
+		serviceAccount,
 	)
 
-	body := fmt.Sprintf(`{"audience":%q,"includeEmail":true}`, p.audience)
+	body := fmt.Sprintf(`{"audience":%q,"includeEmail":true}`, audience)
 	req, err := http.NewRequestWithContext(ctx, "POST", iamURL, strings.NewReader(body))
 	if err != nil {
 		return "", err
@@ -187,46 +209,4 @@ func (p *OAuthJWTBearerProvider) generateIDToken(ctx context.Context, client *ht
 		return "", err
 	}
 	return result.Token, nil
-}
-
-func (p *OAuthJWTBearerProvider) exchangeJWTBearer(ctx context.Context, client *http.Client, assertion string) (string, int, error) {
-	form := url.Values{
-		"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"},
-		"assertion":  {assertion},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", p.tokenEndpoint, strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", 0, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", 0, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return "", 0, fmt.Errorf("token exchange returned %d: %s", resp.StatusCode, respBody)
-	}
-
-	var result struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int    `json:"expires_in"`
-		Error       string `json:"error"`
-		ErrorDesc   string `json:"error_description"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", 0, err
-	}
-	if result.Error != "" {
-		return "", 0, fmt.Errorf("exchange error: %s: %s", result.Error, result.ErrorDesc)
-	}
-	if result.ExpiresIn == 0 {
-		result.ExpiresIn = 3600 // default 1 hour
-	}
-
-	return result.AccessToken, result.ExpiresIn, nil
 }

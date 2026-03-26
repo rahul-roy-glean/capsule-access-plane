@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -61,6 +62,29 @@ func buildProvider(cfg ProviderConfig, credResolver *grants.CredentialResolver) 
 		return NewGCPServiceAccountProvider(cfg.Name, sa, scopes, cfg.Hosts), nil
 
 	case "oauth-jwt-bearer":
+		tokenEndpoint := cfg.Config["token_endpoint"]
+		if tokenEndpoint == "" {
+			return nil, fmt.Errorf("oauth-jwt-bearer provider requires config.token_endpoint")
+		}
+
+		jwtSource := cfg.Config["jwt_source"]
+		if jwtSource == "local-key" {
+			pkRef := cfg.Config["private_key_ref"]
+			if pkRef == "" {
+				return nil, fmt.Errorf("oauth-jwt-bearer local-key requires config.private_key_ref")
+			}
+			appID := cfg.Config["app_id"]
+			if appID == "" {
+				return nil, fmt.Errorf("oauth-jwt-bearer local-key requires config.app_id")
+			}
+			pkData, err := credResolver.Resolve(context.Background(), pkRef)
+			if err != nil {
+				return nil, fmt.Errorf("oauth-jwt-bearer local-key: resolve private key: %w", err)
+			}
+			return NewLocalKeyProvider(cfg.Name, appID, tokenEndpoint, pkData, cfg.Hosts)
+		}
+
+		// Default: GCP IAM source
 		sa := cfg.Config["service_account"]
 		if sa == "" {
 			return nil, fmt.Errorf("oauth-jwt-bearer provider requires config.service_account")
@@ -68,10 +92,6 @@ func buildProvider(cfg ProviderConfig, credResolver *grants.CredentialResolver) 
 		audience := cfg.Config["audience"]
 		if audience == "" {
 			return nil, fmt.Errorf("oauth-jwt-bearer provider requires config.audience")
-		}
-		tokenEndpoint := cfg.Config["token_endpoint"]
-		if tokenEndpoint == "" {
-			return nil, fmt.Errorf("oauth-jwt-bearer provider requires config.token_endpoint")
 		}
 		return NewOAuthJWTBearerProvider(cfg.Name, sa, audience, tokenEndpoint, cfg.Hosts), nil
 
