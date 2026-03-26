@@ -123,19 +123,26 @@ func (p *OAuthJWTBearerProvider) refreshLoop(ctx context.Context) {
 }
 
 func (p *OAuthJWTBearerProvider) refresh(ctx context.Context) error {
-	client := p.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
+	// Step 1: Mint GCP identity token (requires GCP-authenticated client).
+	iamClient := p.HTTPClient
+	if iamClient == nil {
+		var err error
+		iamClient, err = gcpAuthenticatedClient(ctx)
+		if err != nil {
+			return fmt.Errorf("gcp auth for IAM: %w", err)
+		}
 	}
-
-	// Step 1: Mint GCP identity token.
-	idToken, err := p.generateIDToken(ctx, client)
+	idToken, err := p.generateIDToken(ctx, iamClient)
 	if err != nil {
 		return fmt.Errorf("mint id token: %w", err)
 	}
 
-	// Step 2: Exchange for access token.
-	accessToken, expiresIn, err := p.exchangeJWTBearer(ctx, client, idToken)
+	// Step 2: Exchange for access token (public OAuth endpoint, no GCP auth needed).
+	exchangeClient := p.HTTPClient
+	if exchangeClient == nil {
+		exchangeClient = http.DefaultClient
+	}
+	accessToken, expiresIn, err := p.exchangeJWTBearer(ctx, exchangeClient, idToken)
 	if err != nil {
 		return fmt.Errorf("jwt bearer exchange: %w", err)
 	}
