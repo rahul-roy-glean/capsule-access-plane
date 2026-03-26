@@ -178,6 +178,14 @@ func main() {
 			Providers: providerRegistry,
 			Logger:    logger,
 		}
+
+		// Expose the MITM CA cert so clients can trust the proxy.
+		caPEM := ca.CACertPEM()
+		mux.HandleFunc("GET /ca.pem", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/x-pem-file")
+			w.Write(caPEM)
+		})
+
 		go func() {
 			slog.Info("starting CONNECT proxy", "addr", proxyAddr)
 			if err := connectProxy.ListenAndServe(proxyAddr); err != nil {
