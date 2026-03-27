@@ -180,6 +180,10 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("destination %s not allowed by manifest", targetHost), http.StatusForbidden)
 		return
 	}
+	if err := manifest.ValidateDestinationURL(targetURL, h.destinations); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 
 	// SSRF protection — reject private/loopback IPs.
 	dest := manifest.FindDestination(h.destinations, targetHost)
@@ -187,7 +191,8 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if dest != nil {
 		allowedCIDRs = dest.AllowedIPs
 	}
-	if err := manifest.CheckSSRF(targetHost, allowedCIDRs); err != nil {
+	resolution, err := manifest.ResolveAndValidateDestination(targetHost, allowedCIDRs)
+	if err != nil {
 		http.Error(w, "SSRF: "+err.Error(), http.StatusForbidden)
 		return
 	}
@@ -223,7 +228,10 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	outReq.Header.Set("Authorization", "Bearer "+h.credential)
 
 	// Forward request.
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: manifest.NewPinnedHTTPTransport(resolution, nil),
+	}
 	resp, err := client.Do(outReq)
 	if err != nil {
 		http.Error(w, "proxy request failed: "+err.Error(), http.StatusBadGateway)

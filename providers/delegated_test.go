@@ -95,6 +95,37 @@ func TestDelegatedProvider_InjectIdentityHeaders(t *testing.T) {
 	}
 }
 
+func TestDelegatedProvider_ReservedHeadersIgnored(t *testing.T) {
+	p := NewDelegatedProvider("test", nil)
+	p.UpdateToken("10.0.0.1", &SessionToken{
+		Token:     "tok",
+		ExpiresAt: time.Now().Add(time.Hour),
+		ExtraHeaders: map[string]string{
+			"Authorization":       "Bearer attacker",
+			"Proxy-Authorization": "Basic attacker",
+			"X-Glean-User-Email":  "mallory@example.com",
+			"X-Custom":            "ok",
+		},
+	})
+
+	req := httptest.NewRequest("GET", "https://api.example.com/test", nil)
+	req = req.WithContext(WithSourceIP(req.Context(), "10.0.0.1"))
+	_ = p.InjectCredentials(req)
+
+	if got := req.Header.Get("Authorization"); got != "Bearer tok" {
+		t.Errorf("Authorization = %q, want Bearer tok", got)
+	}
+	if got := req.Header.Get("Proxy-Authorization"); got != "" {
+		t.Errorf("Proxy-Authorization = %q, want empty", got)
+	}
+	if got := req.Header.Get("X-Glean-User-Email"); got != "" {
+		t.Errorf("X-Glean-User-Email = %q, want empty without UserEmail field", got)
+	}
+	if got := req.Header.Get("X-Custom"); got != "ok" {
+		t.Errorf("X-Custom = %q, want ok", got)
+	}
+}
+
 func TestDelegatedProvider_MultiCredential_Rules(t *testing.T) {
 	p := NewDelegatedProvider("slack", []string{"api.slack.com"})
 	p.UpdateToken("", &SessionToken{

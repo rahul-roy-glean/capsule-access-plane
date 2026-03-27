@@ -7,7 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/rahul-roy-glean/capsule-access-plane/accessplane"
 	"github.com/rahul-roy-glean/capsule-access-plane/grants"
@@ -284,5 +287,77 @@ func TestExecuteHTTP_PolicyDenied(t *testing.T) {
 
 	if rr.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403. body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestExecuteHTTP_UsesRemoteAddrForDelegatedProvider(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Echo-Auth", r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	verifier, err := identity.NewHMACVerifier(handlerTestSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reg := manifest.NewInMemoryRegistry()
+	targetURL, err := url.Parse(target.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetPort, err := strconv.Atoi(targetURL.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reg.Register(&manifest.ToolManifest{
+		Family:         "delegated_exec",
+		Version:        "1.0",
+		SurfaceKind:    "http",
+		SupportedLanes: []accessplane.Lane{accessplane.LaneRemoteExecution},
+		Destinations:   []manifest.Destination{{Host: targetURL.Hostname(), Port: targetPort, Protocol: targetURL.Scheme, AllowedIPs: []string{"127.0.0.0/8"}}},
+		MethodConstraints: []manifest.MethodConstraint{
+			{Method: "GET", PathPattern: "/**"},
+		},
+		Provider: "delegated",
+	})
+
+	providerRegistry := providers.NewRegistry()
+	dp := providers.NewDelegatedProvider("delegated", []string{"127.0.0.1"})
+	dp.UpdateToken("", &providers.SessionToken{Token: "global-token", ExpiresAt: time.Now().Add(time.Hour)})
+	dp.UpdateToken("10.0.0.8", &providers.SessionToken{Token: "session-token", ExpiresAt: time.Now().Add(time.Hour)})
+	_ = providerRegistry.Register(dp)
+
+	handler := NewExecuteHandler(verifier, reg, policy.NewManifestBasedEngine(reg), providerRegistry, slog.Default())
+
+	token := signTestToken(t, testClaims())
+	reqBody := accessplane.ExecuteHTTPRequest{
+		RunnerID:   "runner-1",
+		SessionID:  "session-1",
+		TurnID:     "turn-1",
+		ToolFamily: "delegated_exec",
+		Method:     "GET",
+		URL:        target.URL + "/test",
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest("POST", "/v1/execute/http", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.RemoteAddr = "10.0.0.8:12345"
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200. body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp accessplane.ExecuteHTTPResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Headers["X-Echo-Auth"] != "Bearer session-token" {
+		t.Errorf("echoed auth = %q, want session token", resp.Headers["X-Echo-Auth"])
 	}
 }

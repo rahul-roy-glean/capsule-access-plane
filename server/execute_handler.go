@@ -89,6 +89,12 @@ func (h *ExecuteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if err := manifest.ValidateDestinationURL(req.URL, m.Destinations); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
 
 	allowedHosts := manifest.BuildAllowedHosts(m.Destinations)
 	if !allowedHosts[targetHost] {
@@ -98,13 +104,16 @@ func (h *ExecuteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 5b: SSRF protection — reject private/loopback IPs
+	// Step 5b: SSRF protection — resolve and pin the validated destination IPs.
 	dest := manifest.FindDestination(m.Destinations, targetHost)
-	var allowedCIDRs []string
-	if dest != nil {
-		allowedCIDRs = dest.AllowedIPs
+	if dest == nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": fmt.Sprintf("destination %s not allowed by manifest", targetHost),
+		})
+		return
 	}
-	if err := manifest.CheckSSRF(targetHost, allowedCIDRs); err != nil {
+	resolution, err := manifest.ResolveAndValidateDestination(dest.Host, dest.AllowedIPs)
+	if err != nil {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "SSRF: " + err.Error(),
 		})
@@ -129,8 +138,15 @@ func (h *ExecuteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Step 7: Evaluate policy
 	policyInput := policy.PolicyInput{
-		Actor:      policy.ActorContext{UserID: claims.RunnerID},
+		Actor: policy.ActorContext{
+			UserID:          claims.UserEmail,
+			VirtualIdentity: claims.VirtualIdentityID,
+			AgentID:         claims.RunnerID,
+		},
 		ToolFamily: req.ToolFamily,
+	}
+	if policyInput.Actor.UserID == "" && policyInput.Actor.VirtualIdentity == "" {
+		policyInput.Actor.UserID = claims.RunnerID
 	}
 	decision, err := h.engine.Evaluate(policyInput)
 	if err != nil {
@@ -155,7 +171,8 @@ func (h *ExecuteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	credential, err := provider.ResolveToken(r.Context())
+	credentialCtx := withRequestSourceIP(r.Context(), r)
+	credential, err := provider.ResolveToken(credentialCtx)
 	if err != nil {
 		h.logger.Error("credential resolution failed", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -186,7 +203,10 @@ func (h *ExecuteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Inject credential.
 	outReq.Header.Set("Authorization", "Bearer "+credential)
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: manifest.NewPinnedHTTPTransport(resolution, nil),
+	}
 	resp, err := client.Do(outReq)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{

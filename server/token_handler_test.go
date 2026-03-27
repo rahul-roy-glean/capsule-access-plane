@@ -130,6 +130,26 @@ func TestUpdateToken_MissingFields(t *testing.T) {
 	}
 }
 
+func TestUpdateToken_InvalidSourceIP(t *testing.T) {
+	dp := providers.NewDelegatedProvider("github", nil)
+	reg := providers.NewRegistry()
+	_ = reg.Register(dp)
+	handler := NewTokenHandlers(reg)
+
+	body, _ := json.Marshal(TokenUpdateRequest{
+		Provider: "github",
+		SourceIP: "not-an-ip",
+		Token:    "tok",
+	})
+	req := httptest.NewRequest("POST", "/v1/providers/update-token", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	handler.UpdateToken(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400. body: %s", rr.Code, rr.Body.String())
+	}
+}
+
 // fakeStaticProvider is a minimal non-delegated provider for testing.
 type fakeStaticProvider struct{ name string }
 

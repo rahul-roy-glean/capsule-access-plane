@@ -25,7 +25,7 @@ import (
 	"github.com/rahul-roy-glean/capsule-access-plane/store"
 )
 
-const testSecret = "e2e-test-secret"
+const testSecret = "e2e-test-secret-min-16"
 
 // e2eServer sets up a complete server stack with in-memory SQLite, returning
 // the base URL, a signed-token helper, and a cleanup function.
@@ -40,7 +40,10 @@ func e2eServer(t *testing.T) (baseURL string, signToken func(runnerID, sessionID
 	}
 
 	// Identity
-	verifier, _ := identity.NewHMACVerifier([]byte(testSecret))
+	verifier, err := identity.NewHMACVerifier([]byte(testSecret))
+	if err != nil {
+		t.Fatalf("new verifier: %v", err)
+	}
 
 	// Manifests
 	registry := manifest.NewInMemoryRegistry()
@@ -681,7 +684,10 @@ func TestE2E_ExecuteHTTP_SuccessWithMockTarget(t *testing.T) {
 	defer target.Close()
 
 	// Minimal setup
-	verifier, _ := identity.NewHMACVerifier([]byte(testSecret))
+	verifier, err := identity.NewHMACVerifier([]byte(testSecret))
+	if err != nil {
+		t.Fatalf("new verifier: %v", err)
+	}
 
 	registry := manifest.NewInMemoryRegistry()
 	_ = registry.Register(&manifest.ToolManifest{
