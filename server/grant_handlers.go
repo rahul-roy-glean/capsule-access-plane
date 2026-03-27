@@ -67,11 +67,18 @@ func (h *GrantHandlers) ProjectGrant(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if req.SessionID != claims.SessionID {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "session_id does not match attestation token",
+		})
+		return
+	}
 
 	runnerClaims := grants.RunnerClaims{
 		RunnerID:  claims.RunnerID,
 		SessionID: claims.SessionID,
 	}
+	reqCtx := withRequestSourceIP(r.Context(), r)
 
 	// Resolve credential via provider registry.
 	// Look up the manifest to find the named provider, if any.
@@ -86,7 +93,7 @@ func (h *GrantHandlers) ProjectGrant(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	resolvedToken, err := provider.ResolveToken(r.Context())
+	resolvedToken, err := provider.ResolveToken(reqCtx)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "credential resolution failed: " + err.Error(),
@@ -94,7 +101,7 @@ func (h *GrantHandlers) ProjectGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.grants.ProjectGrant(r.Context(), &req, runnerClaims, resolvedToken, provider.Name())
+	resp, err := h.grants.ProjectGrant(reqCtx, &req, runnerClaims, resolvedToken, provider.Name())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": err.Error(),
@@ -110,13 +117,13 @@ func (h *GrantHandlers) ProjectGrant(w http.ResponseWriter, r *http.Request) {
 			Lane:      req.Lane,
 			ExpiresAt: time.Now().Add(15 * time.Minute),
 			AuditMetadata: bundle.AuditMetadata{
-				UserID:    "system",
-				SessionID: req.SessionID,
-				RunnerID:  req.RunnerID,
+				UserID:    claims.EffectiveIdentity(),
+				SessionID: claims.SessionID,
+				RunnerID:  claims.RunnerID,
 			},
 		}
 
-		proxyAddr, err := h.adapter.InstallGrantWithCredential(r.Context(), b, req.ToolFamily, resolvedToken)
+		proxyAddr, err := h.adapter.InstallGrantWithCredential(reqCtx, b, req.ToolFamily, resolvedToken)
 		if err != nil {
 			h.logger.Error("failed to install proxy", "grant_id", resp.GrantID, "err", err)
 		} else {

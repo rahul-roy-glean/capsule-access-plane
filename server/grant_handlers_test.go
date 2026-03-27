@@ -19,6 +19,28 @@ import (
 	"github.com/rahul-roy-glean/capsule-access-plane/store"
 )
 
+func setupGrantHandlersWithProviders(t *testing.T, providerRegistry *providers.Registry, reg manifest.Registry) (*GrantHandlers, func()) {
+	t.Helper()
+
+	verifier, err := identity.NewHMACVerifier(handlerTestSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	s, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	sqlStore := grants.NewSQLStore(s.DB())
+	grantSvc := grants.NewService(sqlStore, 15*time.Minute)
+	adapter := runtime.NewDirectHTTPAdapter(reg)
+
+	handlers := NewGrantHandlers(verifier, grantSvc, adapter, providerRegistry, reg, slog.Default())
+	return handlers, func() { _ = s.Close() }
+}
+
 func setupGrantHandlers(t *testing.T) (*GrantHandlers, *identity.HMACVerifier, func()) {
 	t.Helper()
 
@@ -322,5 +344,59 @@ func TestRevokeGrant_RunnerMismatch(t *testing.T) {
 	// Should get a 500 because the grant service validates runner_id mismatch.
 	if revokeRR.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500 (runner mismatch in service). body: %s", revokeRR.Code, revokeRR.Body.String())
+	}
+}
+
+func TestProjectGrant_UsesRequestSourceIPForDelegatedProviders(t *testing.T) {
+	dp := providers.NewDelegatedProvider("github", []string{"api.github.com"})
+	dp.UpdateToken("", &providers.SessionToken{
+		Token:     "global-token",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	dp.UpdateToken("10.10.0.5", &providers.SessionToken{
+		Token:     "session-token",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+
+	reg := manifest.NewInMemoryRegistry()
+	_ = reg.Register(&manifest.ToolManifest{
+		Family:         "github_session",
+		Version:        "1.0",
+		SurfaceKind:    "http",
+		SupportedLanes: []accessplane.Lane{accessplane.LaneDirectHTTP},
+		Destinations:   []manifest.Destination{{Host: "api.github.com", Port: 443, Protocol: "https"}},
+		Provider:       "github",
+	})
+
+	providerRegistry := providers.NewRegistry()
+	_ = providerRegistry.Register(dp)
+	handlers, cleanup := setupGrantHandlersWithProviders(t, providerRegistry, reg)
+	defer cleanup()
+
+	token := signTestToken(t, testClaims())
+	body, _ := json.Marshal(accessplane.ProjectGrantRequest{
+		RunnerID:   "runner-1",
+		SessionID:  "session-1",
+		TurnID:     "turn-1",
+		ToolFamily: "github_session",
+		Lane:       accessplane.LaneDirectHTTP,
+	})
+	req := httptest.NewRequest("POST", "/v1/grants/project", bytes.NewReader(body))
+	req.RemoteAddr = "10.10.0.5:12345"
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	rr := httptest.NewRecorder()
+	handlers.ProjectGrant(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200. body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp accessplane.ProjectGrantResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.ProjectionRef == "" {
+		t.Fatal("expected projection_ref to be returned")
 	}
 }

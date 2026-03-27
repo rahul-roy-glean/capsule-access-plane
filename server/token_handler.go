@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"time"
 
@@ -47,6 +48,12 @@ func (h *TokenHandlers) UpdateToken(w http.ResponseWriter, r *http.Request) {
 	if req.Provider == "" || req.Token == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "provider and token are required",
+		})
+		return
+	}
+	if req.SourceIP != "" && net.ParseIP(req.SourceIP) == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "source_ip must be a valid IP address",
 		})
 		return
 	}

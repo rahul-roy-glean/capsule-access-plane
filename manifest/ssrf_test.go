@@ -51,6 +51,19 @@ func TestIsPrivateIP_LinkLocal(t *testing.T) {
 	}
 }
 
+func TestIsPrivateIP_ExpandedRanges(t *testing.T) {
+	tests := []string{
+		"100.64.0.1",
+		"fc00::1",
+		"fd12:3456:789a::1",
+	}
+	for _, tc := range tests {
+		if !IsPrivateIP(net.ParseIP(tc)) {
+			t.Errorf("%s should be treated as private", tc)
+		}
+	}
+}
+
 func TestCheckSSRF_BlocksPrivateIP(t *testing.T) {
 	// Mock DNS to return a private IP.
 	origLookup := LookupHost
@@ -150,5 +163,25 @@ func TestCheckSSRF_DNSFailure(t *testing.T) {
 	err := CheckSSRF("nonexistent.invalid", nil)
 	if err == nil {
 		t.Fatal("expected error for DNS failure")
+	}
+}
+
+func TestResolveAndValidateDestination_PreservesResolvedIPs(t *testing.T) {
+	origLookup := LookupHost
+	defer func() { LookupHost = origLookup }()
+
+	LookupHost = func(host string) ([]string, error) {
+		return []string{"140.82.121.3"}, nil
+	}
+
+	resolution, err := ResolveAndValidateDestination("api.github.com", nil)
+	if err != nil {
+		t.Fatalf("ResolveAndValidateDestination: %v", err)
+	}
+	if resolution.Host != "api.github.com" {
+		t.Fatalf("Host = %q", resolution.Host)
+	}
+	if len(resolution.IPs) != 1 || !resolution.IPs[0].Equal(net.ParseIP("140.82.121.3")) {
+		t.Fatalf("IPs = %v", resolution.IPs)
 	}
 }

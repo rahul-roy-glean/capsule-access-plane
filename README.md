@@ -203,12 +203,14 @@ make lint        # just linting
 
 | Environment Variable | Required | Default | Description |
 |---------------------|----------|---------|-------------|
-| `ATTESTATION_SECRET` | Yes | — | Shared HMAC secret for runner attestation tokens |
+| `ATTESTATION_SECRET` | Yes | — | Shared HMAC secret for runner attestation tokens (minimum 32 bytes) |
 | `LISTEN_ADDR` | No | `:8080` | HTTP API listen address |
 | `DATABASE_URL` | No | `capsule-access.db` | SQLite database path |
 | `CREDENTIAL_REF` | No | `env:GITHUB_TOKEN` | Default credential reference (`env:`, `literal:`, `stored:`) |
 | `PROVIDERS_CONFIG` | No | — | Path to JSON file with `[]ProviderConfig` for named providers |
 | `PROXY_ADDR` | No | — | CONNECT proxy listen address (e.g. `:3128`). Empty = no proxy. |
+| `HOST_ENDPOINT_CIDRS` | No | `127.0.0.0/8,::1/128` | CIDR allowlist for host-only endpoints like token push and phantom-env |
+| `HOST_ENDPOINT_BEARER_TOKEN` | No | — | Optional extra bearer token required on host-only endpoints |
 
 ## What's Missing
 

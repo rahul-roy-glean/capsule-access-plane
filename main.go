@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -126,6 +127,12 @@ func main() {
 	executeHandler := server.NewExecuteHandler(verifier, registry, engine, providerRegistry, logger)
 	tokenHandlers := server.NewTokenHandlers(providerRegistry)
 	phantomHandlers := server.NewPhantomHandlers(registry)
+	hostEndpointCIDRs := strings.Split(os.Getenv("HOST_ENDPOINT_CIDRS"), ",")
+	hostEndpointGuard, err := server.NewHostEndpointGuard(hostEndpointCIDRs, os.Getenv("HOST_ENDPOINT_BEARER_TOKEN"))
+	if err != nil {
+		slog.Error("failed to configure host endpoint guard", "err", err)
+		os.Exit(1)
+	}
 
 	mux := http.NewServeMux()
 
@@ -146,8 +153,8 @@ func main() {
 	mux.Handle("POST /v1/execute/http", executeHandler)
 
 	// Wire token update and phantom env endpoints
-	mux.HandleFunc("POST /v1/providers/update-token", tokenHandlers.UpdateToken)
-	mux.HandleFunc("GET /v1/phantom-env", phantomHandlers.GetPhantomEnv)
+	mux.Handle("POST /v1/providers/update-token", hostEndpointGuard.Wrap(http.HandlerFunc(tokenHandlers.UpdateToken)))
+	mux.Handle("GET /v1/phantom-env", hostEndpointGuard.Wrap(http.HandlerFunc(phantomHandlers.GetPhantomEnv)))
 
 	// Remaining stubs
 	mux.HandleFunc("POST /v1/events/runner", func(w http.ResponseWriter, r *http.Request) {

@@ -178,3 +178,10 @@ func TestNewHMACVerifier_EmptySecret(t *testing.T) {
 		t.Fatal("expected error for nil secret")
 	}
 }
+
+func TestNewHMACVerifier_RejectsShortSecret(t *testing.T) {
+	_, err := NewHMACVerifier([]byte("short-secret"))
+	if err == nil {
+		t.Fatal("expected error for short secret")
+	}
+}

@@ -183,3 +183,30 @@ func TestExtractPath(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateDestinationURL_ProtocolAndPort(t *testing.T) {
+	destinations := []Destination{
+		{Host: "api.github.com", Port: 443, Protocol: "https"},
+	}
+
+	if err := ValidateDestinationURL("https://api.github.com/repos/foo/bar", destinations); err != nil {
+		t.Fatalf("expected allowed destination, got %v", err)
+	}
+	if err := ValidateDestinationURL("http://api.github.com/repos/foo/bar", destinations); err == nil {
+		t.Fatal("expected protocol mismatch to be rejected")
+	}
+	if err := ValidateDestinationURL("https://api.github.com:8443/repos/foo/bar", destinations); err == nil {
+		t.Fatal("expected port mismatch to be rejected")
+	}
+}
+
+func TestValidateConnectDestination(t *testing.T) {
+	dest := &Destination{Host: "api.github.com", Port: 443, Protocol: "https"}
+
+	if err := ValidateConnectDestination("api.github.com", "443", dest); err != nil {
+		t.Fatalf("expected CONNECT destination to be allowed, got %v", err)
+	}
+	if err := ValidateConnectDestination("api.github.com", "8443", dest); err == nil {
+		t.Fatal("expected CONNECT port mismatch to be rejected")
+	}
+}

@@ -1,6 +1,15 @@
 package manifest
 
-import "strings"
+import (
+	"crypto/tls"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+)
 
 // BuildAllowedHosts returns a set of allowed hostnames from the given destinations.
 func BuildAllowedHosts(destinations []Destination) map[string]bool {
@@ -152,4 +161,137 @@ func FindDestination(destinations []Destination, host string) *Destination {
 		}
 	}
 	return nil
+}
+
+// ValidateDestinationURL ensures the request URL matches a declared manifest
+// destination, including host and any declared protocol/port constraints.
+func ValidateDestinationURL(rawURL string, destinations []Destination) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid target URL: %w", err)
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("invalid target URL")
+	}
+
+	dest := FindDestination(destinations, parsed.Hostname())
+	if dest == nil {
+		return fmt.Errorf("destination %s not allowed by manifest", parsed.Hostname())
+	}
+	if dest.Protocol != "" && !strings.EqualFold(parsed.Scheme, dest.Protocol) {
+		return fmt.Errorf("destination %s must use %s", parsed.Hostname(), dest.Protocol)
+	}
+
+	port := parsed.Port()
+	if port == "" {
+		switch strings.ToLower(parsed.Scheme) {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		}
+	}
+	if dest.Port != 0 {
+		wantPort := strconv.Itoa(dest.Port)
+		if port != wantPort {
+			return fmt.Errorf("destination %s must use port %d", parsed.Hostname(), dest.Port)
+		}
+	}
+	return nil
+}
+
+// TargetAddress returns the dial target for a request URL using a pinned IP when
+// available, while preserving the original destination port semantics.
+func TargetAddress(rawURL string, pinnedIP net.IP) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid target URL: %w", err)
+	}
+
+	port := parsed.Port()
+	if port == "" {
+		switch strings.ToLower(parsed.Scheme) {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		default:
+			return "", fmt.Errorf("unsupported URL scheme %q", parsed.Scheme)
+		}
+	}
+
+	host := parsed.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("invalid target URL")
+	}
+	if pinnedIP != nil {
+		host = pinnedIP.String()
+	}
+
+	return net.JoinHostPort(host, port), nil
+}
+
+// ResolvedDestination carries a host and its validated IPs so callers can pin
+// the eventual network dial to the SSRF-checked addresses.
+type ResolvedDestination struct {
+	Host string
+	IPs  []net.IP
+}
+
+// ResolveAndValidateDestination resolves a manifest destination host and
+// validates the resulting IPs against the SSRF policy.
+func ResolveAndValidateDestination(host string, allowedCIDRs []string) (*ResolvedDestination, error) {
+	ips, err := ResolveValidatedIPs(host, allowedCIDRs)
+	if err != nil {
+		return nil, err
+	}
+	return &ResolvedDestination{
+		Host: host,
+		IPs:  ips,
+	}, nil
+}
+
+// ResolveAndValidateTarget resolves the host in a target URL and validates the
+// resulting IPs against the SSRF policy.
+func ResolveAndValidateTarget(rawURL string, allowedCIDRs []string) (*ResolvedDestination, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid target URL: %w", err)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("invalid target URL")
+	}
+	return ResolveAndValidateDestination(host, allowedCIDRs)
+}
+
+// ValidateConnectDestination ensures a CONNECT target matches the manifest's
+// allowed host and any declared port/protocol constraints.
+func ValidateConnectDestination(host, port string, dest *Destination) error {
+	if dest == nil {
+		return fmt.Errorf("destination %s not allowed by manifest", host)
+	}
+	if host != dest.Host {
+		return fmt.Errorf("destination %s not allowed by manifest", host)
+	}
+	if dest.Protocol != "" && !strings.EqualFold(dest.Protocol, "https") {
+		return fmt.Errorf("destination %s does not permit CONNECT over %s", host, dest.Protocol)
+	}
+	wantPort := DestinationPortString(dest)
+	if wantPort != "" && port != wantPort {
+		return fmt.Errorf("destination %s must use port %s", host, wantPort)
+	}
+	return nil
+}
+
+// NewPinnedHTTPTransport creates an HTTP transport that dials only previously
+// validated IPs while preserving TLS verification against the original host.
+func NewPinnedHTTPTransport(resolution *ResolvedDestination, tlsConfig *tls.Config) *http.Transport {
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{}
+	}
+	return &http.Transport{
+		TLSClientConfig: tlsConfig.Clone(),
+		DialContext:     NewPinnedDialContext(resolution.Host, resolution.IPs, 10*time.Second),
+	}
 }

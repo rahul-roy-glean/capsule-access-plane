@@ -107,20 +107,21 @@ func (p *ConnectProxy) handleConnect(clientConn net.Conn, req *http.Request, cli
 		port = "443"
 	}
 
-	// Step 1: Validate host against manifests.
-	if !p.isHostAllowed(host) {
+	dest := p.findDestination(host)
+	if dest == nil {
 		_, _ = fmt.Fprintf(clientConn, "HTTP/1.1 403 Forbidden\r\n\r\nhost %s not allowed by manifest\r\n", host)
 		p.logProxy(host, "denied_host", "host not in manifest", start)
 		return
 	}
+	if err := manifest.ValidateConnectDestination(host, port, dest); err != nil {
+		_, _ = fmt.Fprintf(clientConn, "HTTP/1.1 403 Forbidden\r\n\r\n%s\r\n", err.Error())
+		p.logProxy(host, "denied_destination", err.Error(), start)
+		return
+	}
 
 	// Step 2: SSRF protection.
-	dest := p.findDestination(host)
-	var allowedCIDRs []string
-	if dest != nil {
-		allowedCIDRs = dest.AllowedIPs
-	}
-	if err := manifest.CheckSSRF(host, allowedCIDRs); err != nil {
+	resolution, err := manifest.ResolveAndValidateDestination(host, dest.AllowedIPs)
+	if err != nil {
 		_, _ = fmt.Fprintf(clientConn, "HTTP/1.1 403 Forbidden\r\n\r\nSSRF: %s\r\n", err.Error())
 		p.logProxy(host, "denied_ssrf", err.Error(), start)
 		return
@@ -136,15 +137,15 @@ func (p *ConnectProxy) handleConnect(clientConn net.Conn, req *http.Request, cli
 	targetAddr := net.JoinHostPort(host, port)
 
 	if hasProvider {
-		p.handleBump(clientConn, host, targetAddr, provider, clientIP, start)
+		p.handleBump(clientConn, host, targetAddr, provider, clientIP, resolution, start)
 	} else {
-		p.handleTunnel(clientConn, targetAddr, start)
+		p.handleTunnel(clientConn, targetAddr, resolution, start)
 	}
 }
 
 // handleBump performs SSL bump (MITM): TLS handshake with client using a
 // generated cert, then intercept HTTP requests and inject credentials.
-func (p *ConnectProxy) handleBump(clientConn net.Conn, host, targetAddr string, provider providers.CredentialProvider, clientIP string, start time.Time) {
+func (p *ConnectProxy) handleBump(clientConn net.Conn, host, targetAddr string, provider providers.CredentialProvider, clientIP string, resolution *manifest.ResolvedDestination, start time.Time) {
 	// TLS handshake with client (we present a cert signed by our CA).
 	// We pre-generate the cert for the target host because SNI may be empty
 	// (e.g. when the client connects to an IP address).
@@ -182,11 +183,11 @@ func (p *ConnectProxy) handleBump(clientConn net.Conn, host, targetAddr string, 
 			return
 		}
 
-		p.handleMITMRequest(tlsConn, req, host, targetAddr, provider, clientIP, start)
+		p.handleMITMRequest(tlsConn, req, host, targetAddr, provider, clientIP, resolution, start)
 	}
 }
 
-func (p *ConnectProxy) handleMITMRequest(clientConn net.Conn, req *http.Request, host, targetAddr string, provider providers.CredentialProvider, clientIP string, start time.Time) {
+func (p *ConnectProxy) handleMITMRequest(clientConn net.Conn, req *http.Request, host, targetAddr string, provider providers.CredentialProvider, clientIP string, resolution *manifest.ResolvedDestination, start time.Time) {
 	// Validate method+path against manifest constraints.
 	if m := p.findManifestForHost(host); m != nil && len(m.MethodConstraints) > 0 {
 		check := manifest.IsRequestAllowed(req.Method, req.URL.Path, m.MethodConstraints)
@@ -240,9 +241,7 @@ func (p *ConnectProxy) handleMITMRequest(clientConn net.Conn, req *http.Request,
 	}
 	transport := &http.Transport{
 		TLSClientConfig: upstreamTLS.Clone(),
-		DialContext: (&net.Dialer{
-			Timeout: 10 * time.Second,
-		}).DialContext,
+		DialContext: manifest.NewPinnedDialContext(resolution.Host, resolution.IPs, 10*time.Second),
 	}
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
@@ -265,8 +264,10 @@ func (p *ConnectProxy) handleMITMRequest(clientConn net.Conn, req *http.Request,
 }
 
 // handleTunnel passes bytes through without inspection.
-func (p *ConnectProxy) handleTunnel(clientConn net.Conn, targetAddr string, start time.Time) {
-	targetConn, err := net.DialTimeout("tcp", targetAddr, 10*time.Second)
+func (p *ConnectProxy) handleTunnel(clientConn net.Conn, targetAddr string, resolution *manifest.ResolvedDestination, start time.Time) {
+	dialCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	targetConn, err := manifest.NewPinnedDialContext(resolution.Host, resolution.IPs, 10*time.Second)(dialCtx, "tcp", targetAddr)
 	if err != nil {
 		p.Logger.Error("tunnel dial failed", "target", targetAddr, "err", err)
 		p.logProxy(targetAddr, "error_dial", err.Error(), start)

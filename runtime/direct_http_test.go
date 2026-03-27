@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,6 +138,66 @@ func TestProxyRejectsDisallowedHost(t *testing.T) {
 
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
+func TestProxyRejectsDisallowedPort(t *testing.T) {
+	adapter := NewDirectHTTPAdapter(testRegistry(t))
+	ctx := context.Background()
+
+	b := testBundle()
+	b.GrantID = "grant-port-test"
+	addr, err := adapter.InstallGrantWithCredential(ctx, b, "github_rest", "test-token")
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	req, _ := http.NewRequest("GET", "http://"+addr+"/test", nil)
+	req.Header.Set("X-Target-URL", "https://api.github.com:8443/repos/foo/bar")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("proxy request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "port") {
+		t.Fatalf("expected port validation error, got %q", string(body))
+	}
+}
+
+func TestProxyRejectsDisallowedProtocol(t *testing.T) {
+	adapter := NewDirectHTTPAdapter(testRegistry(t))
+	ctx := context.Background()
+
+	b := testBundle()
+	b.GrantID = "grant-protocol-test"
+	addr, err := adapter.InstallGrantWithCredential(ctx, b, "github_rest", "test-token")
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	req, _ := http.NewRequest("GET", "http://"+addr+"/test", nil)
+	req.Header.Set("X-Target-URL", "http://api.github.com/repos/foo/bar")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("proxy request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "https") {
+		t.Fatalf("expected protocol validation error, got %q", string(body))
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"testing"
 
 	"github.com/rahul-roy-glean/capsule-access-plane/accessplane"
@@ -139,7 +140,7 @@ func TestProxy_CONNECT_Bump_InjectsCredential(t *testing.T) {
 		SurfaceKind: "http",
 		SupportedLanes: []accessplane.Lane{accessplane.LaneDirectHTTP},
 		Destinations: []manifest.Destination{
-			{Host: targetHost, Port: 443, AllowedIPs: []string{"127.0.0.0/8"}},
+			{Host: targetHost, Port: mustAtoi(t, targetPort), Protocol: "https", AllowedIPs: []string{"127.0.0.0/8"}},
 		},
 		MethodConstraints: []manifest.MethodConstraint{
 			{Method: "GET", PathPattern: "/**"},
@@ -206,6 +207,27 @@ func TestProxy_CONNECT_DisallowedHost(t *testing.T) {
 	}
 }
 
+func TestProxy_CONNECT_DisallowedPort(t *testing.T) {
+	proxy, _ := setupProxy(t, "api.github.com", nil)
+	proxyAddr := startProxy(t, proxy)
+
+	conn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	_, _ = fmt.Fprintf(conn, "CONNECT api.github.com:444 HTTP/1.1\r\nHost: api.github.com:444\r\n\r\n")
+
+	resp, err := http.ReadResponse(bufioReader(conn), nil)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if resp.StatusCode != 403 {
+		t.Errorf("status = %d, want 403", resp.StatusCode)
+	}
+}
+
 func TestProxy_CONNECT_NonConnect_Rejected(t *testing.T) {
 	proxy, _ := setupProxy(t, "api.github.com", nil)
 	proxyAddr := startProxy(t, proxy)
@@ -245,7 +267,7 @@ func TestProxy_CONNECT_Tunnel_NoProvider(t *testing.T) {
 		Version:        "1.0",
 		SurfaceKind:    "http",
 		SupportedLanes: []accessplane.Lane{accessplane.LaneDirectHTTP},
-		Destinations:   []manifest.Destination{{Host: targetHost, AllowedIPs: []string{"127.0.0.0/8"}}},
+		Destinations:   []manifest.Destination{{Host: targetHost, Port: mustAtoi(t, targetURL.Port()), Protocol: "https", AllowedIPs: []string{"127.0.0.0/8"}}},
 	})
 
 	// No provider registered for this host → should tunnel, not bump.
@@ -288,4 +310,13 @@ func TestProxy_CONNECT_Tunnel_NoProvider(t *testing.T) {
 
 func bufioReader(conn net.Conn) *bufio.Reader {
 	return bufio.NewReader(conn)
+}
+
+func mustAtoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatalf("atoi(%q): %v", s, err)
+	}
+	return n
 }

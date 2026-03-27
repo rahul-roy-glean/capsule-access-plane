@@ -89,6 +89,9 @@ func (p *DelegatedProvider) InjectCredentials(req *http.Request) error {
 		req.Header.Set("X-Glean-User-Email", st.UserEmail)
 	}
 	for k, v := range st.ExtraHeaders {
+		if isReservedDelegatedHeader(k) {
+			continue
+		}
 		req.Header.Set(k, v)
 	}
 	return nil
@@ -202,6 +205,15 @@ func containsFold(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func isReservedDelegatedHeader(header string) bool {
+	switch http.CanonicalHeaderKey(header) {
+	case "Authorization", "Proxy-Authorization", "X-Glean-User-Email":
+		return true
+	default:
+		return false
+	}
 }
 
 // contextKey is an unexported type for context keys in this package.

@@ -15,11 +15,13 @@ type HMACVerifier struct {
 	secret []byte
 }
 
+const minSecretBytes = 16
+
 // NewHMACVerifier creates a verifier with the given shared secret.
-// Returns an error if the secret is empty.
+// Returns an error if the secret is too short to provide reasonable entropy.
 func NewHMACVerifier(secret []byte) (*HMACVerifier, error) {
-	if len(secret) == 0 {
-		return nil, fmt.Errorf("identity: secret must not be empty")
+	if len(secret) < minSecretBytes {
+		return nil, fmt.Errorf("identity: secret must be at least %d bytes", minSecretBytes)
 	}
 	return &HMACVerifier{secret: secret}, nil
 }

@@ -221,7 +221,9 @@ and returns the response.
 ## POST /v1/providers/update-token
 
 Push a delegated credential token. Called by the host agent, not by VM agents.
-No attestation token required (intended for host-local communication).
+No attestation token is required, but the endpoint is restricted to
+`HOST_ENDPOINT_CIDRS` (loopback by default) and can additionally require
+`HOST_ENDPOINT_BEARER_TOKEN`.
 
 **Request:**
 
@@ -277,7 +279,9 @@ No attestation token required (intended for host-local communication).
 
 | Code | Meaning |
 |------|---------|
-| 400 | Missing fields, provider is not a delegated type |
+| 400 | Missing fields, invalid `source_ip`, provider is not a delegated type |
+| 401 | Missing or invalid `HOST_ENDPOINT_BEARER_TOKEN` when configured |
+| 403 | Caller IP is outside `HOST_ENDPOINT_CIDRS` |
 | 404 | Unknown provider name |
 
 ## GET /v1/phantom-env
@@ -285,6 +289,9 @@ No attestation token required (intended for host-local communication).
 Returns phantom environment variables needed for CLI tools to bypass local
 credential checks. Called by the host agent at VM boot time to know which
 env vars to inject into the VM.
+
+Like `/v1/providers/update-token`, this endpoint is restricted to
+`HOST_ENDPOINT_CIDRS` and can also require `HOST_ENDPOINT_BEARER_TOKEN`.
 
 **Request:**
 
