@@ -10,11 +10,11 @@ import (
 
 // TokenUpdateRequest is the body of POST /v1/providers/update-token.
 type TokenUpdateRequest struct {
-	Provider  string            `json:"provider"`
-	SourceIP  string            `json:"source_ip,omitempty"`
-	Token     string            `json:"token"`
-	ExpiresAt time.Time         `json:"expires_at,omitempty"`
-	Identity  *TokenIdentity    `json:"identity,omitempty"`
+	Provider  string         `json:"provider"`
+	SourceIP  string         `json:"source_ip,omitempty"`
+	Token     string         `json:"token"`
+	ExpiresAt time.Time      `json:"expires_at,omitempty"`
+	Identity  *TokenIdentity `json:"identity,omitempty"`
 }
 
 // TokenIdentity carries user identity info to inject into proxied requests.

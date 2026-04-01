@@ -19,12 +19,12 @@ import (
 
 // GrantHandlers implements the grant lifecycle HTTP endpoints.
 type GrantHandlers struct {
-	verifier        identity.Verifier
-	grants          *grants.Service
-	adapter         *runtime.DirectHTTPAdapter
-	providers       *providers.Registry
+	verifier         identity.Verifier
+	grants           *grants.Service
+	adapter          *runtime.DirectHTTPAdapter
+	providers        *providers.Registry
 	manifestRegistry manifest.Registry
-	logger          *slog.Logger
+	logger           *slog.Logger
 }
 
 // NewGrantHandlers creates handlers for the grant lifecycle endpoints.
@@ -37,12 +37,12 @@ func NewGrantHandlers(
 	logger *slog.Logger,
 ) *GrantHandlers {
 	return &GrantHandlers{
-		verifier:        verifier,
-		grants:          grantSvc,
-		adapter:         adapter,
-		providers:       providerRegistry,
+		verifier:         verifier,
+		grants:           grantSvc,
+		adapter:          adapter,
+		providers:        providerRegistry,
 		manifestRegistry: manifestRegistry,
-		logger:          logger,
+		logger:           logger,
 	}
 }
 

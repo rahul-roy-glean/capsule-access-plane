@@ -25,8 +25,8 @@ type SessionToken struct {
 
 	// Multi-credential: named credentials with routing rules.
 	// If non-empty, Rules determine which credential key to use per request.
-	Credentials map[string]string         // key → token value
-	Rules       []CredentialRule          // evaluated in order
+	Credentials map[string]string // key → token value
+	Rules       []CredentialRule  // evaluated in order
 }
 
 // CredentialRule maps request patterns to a named credential key.
