@@ -12,7 +12,8 @@ import (
 
 // HMACVerifier validates runner attestation tokens signed with HMAC-SHA256.
 type HMACVerifier struct {
-	secret []byte
+	secret   []byte
+	tenantID string // if non-empty, verify token tenant_id matches
 }
 
 // NewHMACVerifier creates a verifier with the given shared secret.
@@ -22,6 +23,13 @@ func NewHMACVerifier(secret []byte) (*HMACVerifier, error) {
 		return nil, fmt.Errorf("identity: secret must not be empty")
 	}
 	return &HMACVerifier{secret: secret}, nil
+}
+
+// WithTenantID returns a copy of the verifier that also validates the token's
+// tenant_id matches the given value. If tenantID is empty, no tenant validation
+// is performed.
+func (v *HMACVerifier) WithTenantID(tenantID string) *HMACVerifier {
+	return &HMACVerifier{secret: v.secret, tenantID: tenantID}
 }
 
 // Verify validates the attestation token and returns the embedded claims.
@@ -72,6 +80,10 @@ func (v *HMACVerifier) Verify(attestation string) (*Claims, error) {
 	}
 	if claims.WorkloadKey == "" {
 		return nil, fmt.Errorf("identity: missing required field: workload_key")
+	}
+
+	if v.tenantID != "" && claims.TenantID != v.tenantID {
+		return nil, fmt.Errorf("identity: tenant_id mismatch: token has %q, expected %q", claims.TenantID, v.tenantID)
 	}
 
 	return &claims, nil

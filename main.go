@@ -38,6 +38,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Read tenant ID for multi-tenant scoping.
+	tenantID := os.Getenv("TENANT_ID")
+
 	// Database URL (default: capsule-access.db)
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
@@ -49,6 +52,10 @@ func main() {
 	if err != nil {
 		slog.Error("failed to create HMAC verifier", "err", err)
 		os.Exit(1)
+	}
+	if tenantID != "" {
+		verifier = verifier.WithTenantID(tenantID)
+		slog.Info("tenant scoping enabled", "tenant_id", tenantID)
 	}
 
 	// Open SQLite store and run migrations
@@ -126,6 +133,7 @@ func main() {
 	executeHandler := server.NewExecuteHandler(verifier, registry, engine, providerRegistry, logger)
 	tokenHandlers := server.NewTokenHandlers(providerRegistry)
 	phantomHandlers := server.NewPhantomHandlers(registry)
+	gcsHandlers := server.NewGCSHandlers(verifier, providerRegistry, logger)
 
 	mux := http.NewServeMux()
 
@@ -148,6 +156,9 @@ func main() {
 	// Wire token update and phantom env endpoints
 	mux.HandleFunc("POST /v1/providers/update-token", tokenHandlers.UpdateToken)
 	mux.HandleFunc("GET /v1/phantom-env", phantomHandlers.GetPhantomEnv)
+
+	// Wire GCS credential endpoint
+	mux.HandleFunc("GET /v1/credentials/gcs", gcsHandlers.GetCredentials)
 
 	// Remaining stubs
 	mux.HandleFunc("POST /v1/events/runner", func(w http.ResponseWriter, r *http.Request) {
