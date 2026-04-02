@@ -220,17 +220,21 @@ and returns the response.
 
 ## POST /v1/providers/update-token
 
-Push a delegated credential token. Called by the host agent, not by VM agents.
+Push a delegated credential token. Called by the external service (not by VM agents).
 No attestation token required (intended for host-local communication).
+
+Tokens can be scoped per-session using `session_id` (preferred), per-source using
+`source_ip` (deprecated), or global (no scope key). The proxy resolves tokens in
+order: session_id > source_ip > global.
 
 **Request:**
 
 ```json
 {
   "provider": "github",
+  "session_id": "818233b1-72e0-481c-a1f3-5a3d33f52e7b",
   "token": "ghs_installation_token_here",
   "expires_at": "2026-03-20T11:00:00Z",
-  "source_ip": "172.16.0.2",
   "identity": {
     "user_email": "alice@glean.com",
     "headers": {
@@ -240,10 +244,14 @@ No attestation token required (intended for host-local communication).
 }
 ```
 
-- `source_ip` (optional): Scopes the token to a specific VM source IP. If
-  omitted, the token is set as the global fallback.
-- `identity` (optional): Identity headers injected into proxied requests.
-  `user_email` sets `X-Glean-User-Email`. `headers` sets arbitrary headers.
+| Field | Required | Description |
+|-------|----------|-------------|
+| `provider` | Yes | Provider name (must be a `delegated` type) |
+| `token` | Yes | Credential token to inject |
+| `session_id` | No | Scope token to a specific session. The CONNECT proxy extracts `session_id` from the attestation token in `Proxy-Authorization` to match. |
+| `source_ip` | No | Deprecated. Scope by source IP. Prefer `session_id`. |
+| `expires_at` | No | Token expiry (tokens rejected after this time) |
+| `identity` | No | Identity headers injected into proxied requests |
 
 **Multi-credential push** (different tokens for different operations on the same domain):
 
@@ -313,6 +321,19 @@ proxy replaces them with real credentials at the network boundary.
 
 Runner lifecycle event ingestion. **Not yet implemented** — returns 501.
 
+## GET /v1/ca.pem
+
+Get the CONNECT proxy's CA certificate in PEM format. VMs fetch this at boot
+to install in their trust store so SSL bump (MITM) connections are trusted.
+
+No auth required. Returns `503 Service Unavailable` if the CONNECT proxy is not enabled.
+
+**Response (200):** PEM-encoded certificate (`Content-Type: application/x-pem-file`)
+
+Note: the CA is generated in-memory on each access plane startup. If the pod
+restarts, a new CA is generated and running VMs will need a fresh allocation
+to pick up the new certificate.
+
 ## Using the Local Proxy (Direct HTTP Lane)
 
 After getting a `projection_ref` from `/v1/grants/project`, send requests
@@ -333,16 +354,27 @@ The proxy:
 
 ## Using the CONNECT Proxy
 
-Set `HTTPS_PROXY` in the VM and make standard HTTPS requests:
+Set `HTTPS_PROXY` in the VM and make standard HTTPS requests. The thaw agent
+embeds the attestation token in the proxy URL for session identification:
 
 ```bash
-export HTTPS_PROXY=http://172.16.0.1:3128
+# Thaw agent sets this automatically (token embedded for session scoping):
+export HTTPS_PROXY=http://bearer:ATTESTATION_TOKEN@172.16.0.1:3128
+
+# All HTTPS requests route through the proxy:
 curl https://api.github.com/repos/org/repo
+gh repo list
 ```
 
 The proxy:
+- extracts `session_id` from the `Proxy-Authorization` header (decoded from URL credentials)
 - validates the CONNECT target host against all manifest destinations
 - checks SSRF
-- if a credential provider matches the host: SSL bump (MITM), inject credentials, enforce method+path
+- if a credential provider matches the host: SSL bump (MITM), inject session-scoped credentials, enforce method+path
 - if no provider: raw tunnel (no inspection, no credential injection)
+
+Token resolution order for credential injection:
+1. Per-session token (matched by `session_id` from attestation token)
+2. Per-source IP token (legacy, deprecated)
+3. Global fallback token
 - rejects hosts not in any manifest with 403

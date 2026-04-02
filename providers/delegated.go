@@ -140,10 +140,22 @@ func (p *DelegatedProvider) HasToken() bool {
 }
 
 // resolveSession finds the best session token for the given context.
+// Checks session_id first (from attestation token), then source IP, then global.
 func (p *DelegatedProvider) resolveSession(ctx context.Context) (*SessionToken, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
+	// Prefer session_id scoping (from attestation token)
+	if sessionID := SessionIDFromContext(ctx); sessionID != "" {
+		if st, ok := p.sessions[sessionID]; ok {
+			if !st.ExpiresAt.IsZero() && time.Now().After(st.ExpiresAt) {
+				return nil, fmt.Errorf("delegated: provider %q token for session %s expired", p.name, sessionID)
+			}
+			return st, nil
+		}
+	}
+
+	// Fall back to source IP
 	if sourceIP := SourceIPFromContext(ctx); sourceIP != "" {
 		if st, ok := p.sessions[sourceIP]; ok {
 			if !st.ExpiresAt.IsZero() && time.Now().After(st.ExpiresAt) {
@@ -208,6 +220,7 @@ func containsFold(ss []string, s string) bool {
 type contextKey int
 
 const sourceIPKey contextKey = iota
+const sessionIDKey contextKey = 1
 
 // WithSourceIP returns a context carrying the client's source IP.
 func WithSourceIP(ctx context.Context, ip string) context.Context {
@@ -217,6 +230,19 @@ func WithSourceIP(ctx context.Context, ip string) context.Context {
 // SourceIPFromContext extracts the source IP from a context, or "".
 func SourceIPFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(sourceIPKey).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// WithSessionID returns a context carrying the session ID from the attestation token.
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, sessionIDKey, sessionID)
+}
+
+// SessionIDFromContext extracts the session ID from a context, or "".
+func SessionIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(sessionIDKey).(string); ok {
 		return v
 	}
 	return ""

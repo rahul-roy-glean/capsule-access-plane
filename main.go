@@ -160,6 +160,19 @@ func main() {
 	// Wire GCS credential endpoint
 	mux.HandleFunc("GET /v1/credentials/gcs", gcsHandlers.GetCredentials)
 
+	// CA cert endpoint — serves the CONNECT proxy's CA cert in PEM format.
+	// VMs fetch this to install in their trust store for SSL bump.
+	// Populated after the proxy starts (nil until then).
+	var caCertPEM []byte
+	mux.HandleFunc("GET /v1/ca.pem", func(w http.ResponseWriter, r *http.Request) {
+		if len(caCertPEM) == 0 {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "CONNECT proxy not enabled"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-pem-file")
+		w.Write(caCertPEM)
+	})
+
 	// Remaining stubs
 	mux.HandleFunc("POST /v1/events/runner", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotImplemented, map[string]string{
@@ -183,6 +196,7 @@ func main() {
 			slog.Error("failed to create CA for proxy", "err", err)
 			os.Exit(1)
 		}
+		caCertPEM = ca.CACertPEM()
 		connectProxy := &proxy.ConnectProxy{
 			CA:        ca,
 			Manifests: registry,
