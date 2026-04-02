@@ -17,3 +17,8 @@ output "namespace" {
   description = "Kubernetes namespace"
   value       = kubernetes_namespace.access_plane.metadata[0].name
 }
+
+output "gcp_service_account_email" {
+  description = "GCP service account email for the access plane (empty if not created)"
+  value       = var.create_gcp_service_account ? google_service_account.access_plane[0].email : ""
+}

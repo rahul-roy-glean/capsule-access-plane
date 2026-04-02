@@ -122,3 +122,21 @@ variable "disk_size" {
   type        = string
   default     = "10Gi"
 }
+
+variable "create_gcp_service_account" {
+  description = "Create a dedicated GCP service account for the access plane with Workload Identity"
+  type        = bool
+  default     = true
+}
+
+variable "gcp_service_account_id" {
+  description = "GCP service account ID (e.g. capsule-dev-access-plane). Only used when create_gcp_service_account=true."
+  type        = string
+  default     = "capsule-access-plane"
+}
+
+variable "token_creator_on_self" {
+  description = "Grant the access plane SA roles/iam.serviceAccountTokenCreator on itself (required for gcp-sa provider)"
+  type        = bool
+  default     = true
+}

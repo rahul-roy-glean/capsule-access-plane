@@ -1,31 +1,24 @@
-family: gcp_cli_read
+family: slack_api
 version: "1.0"
-surface_kind: cli
+surface_kind: http
 logical_actions:
-  - name: list_instances
+  - name: send_message
     risk_class: standard
-    write: false
-  - name: describe_bucket
+    write: true
+  - name: read_channel
     risk_class: standard
     write: false
 supported_lanes:
-  - remote_execution
-  - helper_session
   - direct_http
+  - remote_execution
 preferred_lane:
   default: direct_http
 auth_patterns:
   - bearer_token
-binary_matchers:
-  - gcloud
-  - gsutil
 destinations:
-  - host: "*.googleapis.com"
+  - host: "*.slack.com"
     port: 443
     protocol: https
-phantom_env:
-  CLOUDSDK_AUTH_ACCESS_TOKEN: "phantom"
-  CLOUDSDK_CORE_PROJECT: "phantom"
 method_constraints:
   - method: GET
     path_pattern: "/**"

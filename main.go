@@ -19,6 +19,7 @@ import (
 	"github.com/rahul-roy-glean/capsule-access-plane/proxy"
 	"github.com/rahul-roy-glean/capsule-access-plane/runtime"
 	"github.com/rahul-roy-glean/capsule-access-plane/server"
+	"github.com/rahul-roy-glean/capsule-access-plane/session"
 	"github.com/rahul-roy-glean/capsule-access-plane/store"
 )
 
@@ -68,12 +69,17 @@ func main() {
 	defer func() { _ = dataStore.Close() }()
 	slog.Info("opened SQLite store", "database", databaseURL)
 
-	// Load manifests from embedded filesystem
-	registry := manifest.NewInMemoryRegistry()
+	// Load manifests: base layer from embedded YAML, dynamic layer from SQLite
+	familyStore := manifest.NewFamilyStore(dataStore.DB())
+	registry := manifest.NewLayeredRegistry(familyStore)
 	loader := &manifest.YAMLLoader{}
 	if err := manifest.LoadAllFamilies(loader, registry); err != nil {
 		slog.Error("failed to load manifest families", "err", err)
 		os.Exit(1) //nolint:gocritic // exitAfterDefer: acceptable in main()
+	}
+	if err := registry.LoadDynamic(context.Background()); err != nil {
+		slog.Error("failed to load dynamic families", "err", err)
+		os.Exit(1)
 	}
 	slog.Info("loaded manifest families", "count", len(registry.List()))
 
@@ -135,6 +141,11 @@ func main() {
 	phantomHandlers := server.NewPhantomHandlers(registry)
 	gcsHandlers := server.NewGCSHandlers(verifier, providerRegistry, logger)
 
+	// Session policy store and resolver for per-session dynamic policies.
+	policyStore := session.NewPolicyStore()
+	_ = session.NewResolver(policyStore, registry) // sessionResolver — used by later phases
+	sessionHandlers := server.NewSessionHandlers(policyStore, registry, providerRegistry, logger)
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +170,18 @@ func main() {
 
 	// Wire GCS credential endpoint
 	mux.HandleFunc("GET /v1/credentials/gcs", gcsHandlers.GetCredentials)
+
+	// Family CRUD endpoints
+	familyHandlers := server.NewFamilyHandlers(registry, logger)
+	mux.HandleFunc("GET /v1/families", familyHandlers.ListFamilies)
+	mux.HandleFunc("GET /v1/families/{name}", familyHandlers.GetFamily)
+	mux.HandleFunc("POST /v1/families", familyHandlers.CreateFamily)
+	mux.HandleFunc("DELETE /v1/families/{name}", familyHandlers.DeleteFamily)
+
+	// Session policy endpoints
+	mux.HandleFunc("POST /v1/sessions/{session_id}/policy", sessionHandlers.SetPolicy)
+	mux.HandleFunc("GET /v1/sessions/{session_id}/policy", sessionHandlers.GetPolicy)
+	mux.HandleFunc("DELETE /v1/sessions/{session_id}/policy", sessionHandlers.DeletePolicy)
 
 	// CA cert endpoint — serves the CONNECT proxy's CA cert in PEM format.
 	// VMs fetch this to install in their trust store for SSL bump.

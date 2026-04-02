@@ -236,7 +236,7 @@ order: session_id > source_ip > global.
   "token": "ghs_installation_token_here",
   "expires_at": "2026-03-20T11:00:00Z",
   "identity": {
-    "user_email": "alice@glean.com",
+    "user_email": "name@company.com",
     "headers": {
       "X-Glean-Agent-Session": "sess-123"
     }
@@ -291,7 +291,7 @@ order: session_id > source_ip > global.
 ## GET /v1/phantom-env
 
 Returns phantom environment variables needed for CLI tools to bypass local
-credential checks. Called by the host agent at VM boot time to know which
+credential checks. Called by the thaw agent at VM boot time to know which
 env vars to inject into the VM.
 
 **Request:**
@@ -302,7 +302,20 @@ curl http://localhost:8080/v1/phantom-env
 
 # Specific families:
 curl http://localhost:8080/v1/phantom-env?families=gcp_cli_read,kubectl
+
+# Session-scoped (only families in the session's policy):
+curl http://localhost:8080/v1/phantom-env?session_id=sess-123
 ```
+
+**Query params:**
+
+| Param | Description |
+|---|---|
+| `families` | Comma-separated family names to filter by |
+| `session_id` | Scope to the session's allowed families (from session policy) |
+
+If `session_id` is provided and the session has a policy, only families in
+that policy are included. If the session has no policy, returns empty `{}`.
 
 **Response (200):**
 
@@ -320,6 +333,143 @@ proxy replaces them with real credentials at the network boundary.
 ## POST /v1/events/runner
 
 Runner lifecycle event ingestion. **Not yet implemented** — returns 501.
+
+## Family Management
+
+Dynamic family CRUD for managing API manifests at runtime. YAML-loaded families
+are read-only base families; API-created families can be created, updated, and deleted.
+
+### GET /v1/families
+
+List all available families (base YAML + dynamic API-created).
+
+**Response (200):**
+
+```json
+{
+  "families": [
+    {"name": "github_rest", "source": "yaml"},
+    {"name": "gcp_cli_read", "source": "yaml"},
+    {"name": "custom_api", "source": "api"}
+  ]
+}
+```
+
+### GET /v1/families/{name}
+
+Get a single family definition (full manifest JSON).
+
+**Response (200):**
+
+```json
+{
+  "family": "github_rest",
+  "source": "yaml",
+  "destinations": [{"host": "api.github.com", "port": 443}],
+  "provider": {"type": "delegated", "name": "github"}
+}
+```
+
+**Error codes:** 404 (unknown family)
+
+### POST /v1/families
+
+Create or update a dynamic family. Validates the manifest before storing.
+Cannot override YAML-defined base families.
+
+**Request:**
+
+```json
+{
+  "family": "custom_api",
+  "destinations": [{"host": "api.custom.com", "port": 443}],
+  "provider": {"type": "delegated", "name": "custom"}
+}
+```
+
+**Response (201):** `{"family": "custom_api", "status": "created"}`
+
+**Error codes:** 400 (invalid manifest), 409 (conflicts with YAML base family)
+
+### DELETE /v1/families/{name}
+
+Remove an API-created family. Cannot delete YAML-defined base families.
+
+**Response (204):** No content
+
+**Error codes:** 404 (unknown family), 409 (YAML base family, cannot delete)
+
+## Session Policy
+
+Per-session policy endpoints. The control plane pushes a session's allowed
+families and credentials after runner allocation. Sessions without a policy
+are denied all access.
+
+### POST /v1/sessions/{id}/policy
+
+Set a session's allowed families and credentials. Called by the control plane
+after allocating or resuming a runner.
+
+**Request:**
+
+```json
+{
+  "families": {
+    "github_rest": {"token": "ghs_xxxxxxxxxxxx"},
+    "gcp_cli_read": {"credential_ref": "sm:my-project/gcp-sa-key"},
+    "slack_api": {}
+  }
+}
+```
+
+Each family key must exist in the registry (base or dynamic). Per-family value:
+
+| Shape | Meaning |
+|---|---|
+| `{"token": "..."}` | Delegated — use this token for credential injection |
+| `{"credential_ref": "sm:..."}` | Managed — access plane resolves the secret ref |
+| `{}` | Auto-minting — access plane provider generates tokens (e.g. GCP SA) |
+
+**Response (200):**
+
+```json
+{
+  "status": "ok",
+  "session_id": "sess-123"
+}
+```
+
+**Error codes:** 400 (unknown family name, missing required token for delegated provider)
+
+### GET /v1/sessions/{id}/policy
+
+Get a session's current policy.
+
+**Response (200):**
+
+```json
+{
+  "session_id": "sess-123",
+  "families": ["github_rest", "gcp_cli_read", "slack_api"],
+  "created_at": "2026-04-02T10:00:00Z"
+}
+```
+
+**Error codes:** 404 (no policy set for session)
+
+### DELETE /v1/sessions/{id}/policy
+
+Revoke a session's policy. The session immediately loses access to all families.
+Any active grants or provider tokens scoped to this session are revoked.
+
+**Response (200):**
+
+```json
+{
+  "status": "revoked",
+  "session_id": "sess-123"
+}
+```
 
 ## GET /v1/ca.pem
 

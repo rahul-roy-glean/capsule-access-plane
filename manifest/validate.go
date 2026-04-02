@@ -147,9 +147,23 @@ func globMatch(pattern, path []string) bool {
 // FindDestination returns the Destination matching the given host, or nil.
 func FindDestination(destinations []Destination, host string) *Destination {
 	for i := range destinations {
-		if destinations[i].Host == host {
+		if MatchHost(destinations[i].Host, host) {
 			return &destinations[i]
 		}
 	}
 	return nil
+}
+
+// MatchHost checks if a host matches a pattern. Supports exact match and
+// wildcard suffix matching with "*." prefix (e.g. "*.googleapis.com" matches
+// "storage.googleapis.com" but not "googleapis.com").
+func MatchHost(pattern, host string) bool {
+	if pattern == host {
+		return true
+	}
+	if strings.HasPrefix(pattern, "*.") {
+		suffix := pattern[1:] // ".googleapis.com"
+		return strings.HasSuffix(host, suffix)
+	}
+	return false
 }

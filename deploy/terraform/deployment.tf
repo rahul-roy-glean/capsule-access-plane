@@ -43,6 +43,8 @@ resource "kubernetes_deployment" "access_plane" {
       }
 
       spec {
+        service_account_name = kubernetes_service_account.access_plane.metadata[0].name
+
         container {
           name  = "access-plane"
           image = "${var.image_repository}:${var.image_tag}"

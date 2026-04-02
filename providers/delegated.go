@@ -70,7 +70,15 @@ func (p *DelegatedProvider) Matches(host string) bool {
 	if len(p.hosts) == 0 {
 		return true
 	}
-	return p.hosts[host]
+	for h := range p.hosts {
+		if h == host {
+			return true
+		}
+		if strings.HasPrefix(h, "*.") && strings.HasSuffix(host, h[1:]) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *DelegatedProvider) InjectCredentials(req *http.Request) error {
