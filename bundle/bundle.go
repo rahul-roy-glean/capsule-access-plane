@@ -15,7 +15,7 @@ type ProjectionBundle struct {
 	Lane                accessplane.Lane         `json:"lane"`
 	ExpiresAt           time.Time                `json:"expires_at"`
 	AuditMetadata       AuditMetadata            `json:"audit_metadata"`
-	NetworkRestrictions *NetworkRestrictions      `json:"network_restrictions,omitempty"`
+	NetworkRestrictions *NetworkRestrictions     `json:"network_restrictions,omitempty"`
 	ProxyConfig         *ProxyConfig             `json:"proxy_config,omitempty"`
 	HelperConfig        *HelperConfig            `json:"helper_config,omitempty"`
 	MetadataEmulation   *MetadataEmulationConfig `json:"metadata_emulation,omitempty"`

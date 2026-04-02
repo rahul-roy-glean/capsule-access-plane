@@ -225,6 +225,7 @@ The following are designed but not yet implemented:
 
 ## Documentation
 
+- [docs/guide.md](docs/guide.md) — **start here** — setup, config structure, families, providers, common patterns
 - [docs/architecture.md](docs/architecture.md) — system design, request flows, component model
 - [docs/lanes.md](docs/lanes.md) — detailed lane comparison and selection logic
 - [docs/manifests.md](docs/manifests.md) — manifest schema, authoring guide, shipped families

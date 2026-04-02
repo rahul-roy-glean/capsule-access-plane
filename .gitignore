@@ -8,3 +8,8 @@ coverage.out
 
 # SQLite databases
 *.db
+
+# Terraform
+deploy/terraform/.terraform.lock.hcl
+deploy/terraform/.terraform
+deploy/terraform/*.tfvars

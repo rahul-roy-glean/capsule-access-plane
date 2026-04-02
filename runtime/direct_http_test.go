@@ -17,9 +17,9 @@ func testRegistry(t *testing.T) manifest.Registry {
 	t.Helper()
 	reg := manifest.NewInMemoryRegistry()
 	_ = reg.Register(&manifest.ToolManifest{
-		Family:      "github_rest",
-		Version:     "1.0",
-		SurfaceKind: "http",
+		Family:         "github_rest",
+		Version:        "1.0",
+		SurfaceKind:    "http",
 		SupportedLanes: []accessplane.Lane{accessplane.LaneDirectHTTP},
 		Destinations: []manifest.Destination{
 			{Host: "api.github.com", Port: 443, Protocol: "https"},

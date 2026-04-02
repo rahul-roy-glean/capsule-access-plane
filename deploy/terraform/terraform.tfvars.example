@@ -1,0 +1,43 @@
+# Required — GCP / Cluster
+project_id       = "my-gcp-project"
+region           = "us-central1"
+gke_cluster_name = "my-gke-cluster"
+gke_location     = "us-central1-c"
+
+# Required — Image
+image_repository = "us-docker.pkg.dev/my-gcp-project/capsule/access-plane"
+image_tag        = "latest"
+
+# Required — Secrets (pass via CLI or .tfvars, never commit real values)
+# attestation_secret = "change-me"
+
+# Optional — Application config
+# namespace        = "access-plane"
+# credential_ref   = "env:GITHUB_TOKEN"
+# tenant_id        = ""
+# providers_config = <<-EOF
+#   [
+#     {"name": "github", "type": "delegated", "hosts": ["api.github.com", "github.com"]},
+#     {"name": "internal", "type": "static", "hosts": ["api.internal.corp"], "config": {"credential_ref": "env:INTERNAL_TOKEN"}}
+#   ]
+# EOF
+
+# Optional — CONNECT proxy
+# enable_connect_proxy = false
+
+# Optional — Scaling
+# replicas = 1
+
+# Optional — Resources
+# resources_requests_cpu    = "100m"
+# resources_requests_memory = "128Mi"
+# resources_limits_cpu      = "500m"
+# resources_limits_memory   = "512Mi"
+
+# Optional — Storage
+# disk_size = "10Gi"
+
+# Optional — Extra env vars
+# extra_env = {
+#   "GITHUB_TOKEN" = "ghp_..."
+# }

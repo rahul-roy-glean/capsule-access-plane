@@ -10,11 +10,12 @@ import (
 
 // TokenUpdateRequest is the body of POST /v1/providers/update-token.
 type TokenUpdateRequest struct {
-	Provider  string            `json:"provider"`
-	SourceIP  string            `json:"source_ip,omitempty"`
-	Token     string            `json:"token"`
-	ExpiresAt time.Time         `json:"expires_at,omitempty"`
-	Identity  *TokenIdentity    `json:"identity,omitempty"`
+	Provider  string         `json:"provider"`
+	SessionID string         `json:"session_id,omitempty"`
+	SourceIP  string         `json:"source_ip,omitempty"` // deprecated: prefer session_id
+	Token     string         `json:"token"`
+	ExpiresAt time.Time      `json:"expires_at,omitempty"`
+	Identity  *TokenIdentity `json:"identity,omitempty"`
 }
 
 // TokenIdentity carries user identity info to inject into proxied requests.
@@ -76,7 +77,12 @@ func (h *TokenHandlers) UpdateToken(w http.ResponseWriter, r *http.Request) {
 		st.ExtraHeaders = req.Identity.ExtraHeaders
 	}
 
-	dp.UpdateToken(req.SourceIP, st)
+	// Scope key: prefer session_id, fall back to source_ip, then global
+	scopeKey := req.SessionID
+	if scopeKey == "" {
+		scopeKey = req.SourceIP
+	}
+	dp.UpdateToken(scopeKey, st)
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":   "updated",

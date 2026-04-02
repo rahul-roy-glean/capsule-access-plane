@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -107,6 +109,10 @@ func (p *ConnectProxy) handleConnect(clientConn net.Conn, req *http.Request, cli
 		port = "443"
 	}
 
+	// Extract session_id from Proxy-Authorization header (attestation token).
+	// Format: Bearer base64(json_claims).base64(hmac)
+	sessionID := extractSessionIDFromProxyAuth(req.Header.Get("Proxy-Authorization"))
+
 	// Step 1: Validate host against manifests.
 	if !p.isHostAllowed(host) {
 		_, _ = fmt.Fprintf(clientConn, "HTTP/1.1 403 Forbidden\r\n\r\nhost %s not allowed by manifest\r\n", host)
@@ -136,7 +142,7 @@ func (p *ConnectProxy) handleConnect(clientConn net.Conn, req *http.Request, cli
 	targetAddr := net.JoinHostPort(host, port)
 
 	if hasProvider {
-		p.handleBump(clientConn, host, targetAddr, provider, clientIP, start)
+		p.handleBump(clientConn, host, targetAddr, provider, clientIP, sessionID, start)
 	} else {
 		p.handleTunnel(clientConn, targetAddr, start)
 	}
@@ -144,7 +150,7 @@ func (p *ConnectProxy) handleConnect(clientConn net.Conn, req *http.Request, cli
 
 // handleBump performs SSL bump (MITM): TLS handshake with client using a
 // generated cert, then intercept HTTP requests and inject credentials.
-func (p *ConnectProxy) handleBump(clientConn net.Conn, host, targetAddr string, provider providers.CredentialProvider, clientIP string, start time.Time) {
+func (p *ConnectProxy) handleBump(clientConn net.Conn, host, targetAddr string, provider providers.CredentialProvider, clientIP, sessionID string, start time.Time) {
 	// TLS handshake with client (we present a cert signed by our CA).
 	// We pre-generate the cert for the target host because SNI may be empty
 	// (e.g. when the client connects to an IP address).
@@ -182,11 +188,11 @@ func (p *ConnectProxy) handleBump(clientConn net.Conn, host, targetAddr string, 
 			return
 		}
 
-		p.handleMITMRequest(tlsConn, req, host, targetAddr, provider, clientIP, start)
+		p.handleMITMRequest(tlsConn, req, host, targetAddr, provider, clientIP, sessionID, start)
 	}
 }
 
-func (p *ConnectProxy) handleMITMRequest(clientConn net.Conn, req *http.Request, host, targetAddr string, provider providers.CredentialProvider, clientIP string, start time.Time) {
+func (p *ConnectProxy) handleMITMRequest(clientConn net.Conn, req *http.Request, host, targetAddr string, provider providers.CredentialProvider, clientIP, sessionID string, start time.Time) {
 	// Validate method+path against manifest constraints.
 	if m := p.findManifestForHost(host); m != nil && len(m.MethodConstraints) > 0 {
 		check := manifest.IsRequestAllowed(req.Method, req.URL.Path, m.MethodConstraints)
@@ -210,9 +216,12 @@ func (p *ConnectProxy) handleMITMRequest(clientConn net.Conn, req *http.Request,
 		}
 	}
 
-	// Inject credentials with source IP context for session-scoped resolution.
+	// Inject credentials with source IP and session ID context for session-scoped resolution.
 	if clientIP != "" {
 		req = req.WithContext(providers.WithSourceIP(req.Context(), clientIP))
+	}
+	if sessionID != "" {
+		req = req.WithContext(providers.WithSessionID(req.Context(), sessionID))
 	}
 	if err := provider.InjectCredentials(req); err != nil {
 		p.Logger.Error("credential injection failed", "host", host, "err", err)
@@ -287,7 +296,7 @@ func (p *ConnectProxy) handlePlainHTTP(clientConn net.Conn, req *http.Request) {
 func (p *ConnectProxy) isHostAllowed(host string) bool {
 	for _, m := range p.Manifests.List() {
 		for _, d := range m.Destinations {
-			if d.Host == host {
+			if manifest.MatchHost(d.Host, host) {
 				return true
 			}
 		}
@@ -309,7 +318,7 @@ func (p *ConnectProxy) findDestination(host string) *manifest.Destination {
 func (p *ConnectProxy) findManifestForHost(host string) *manifest.ToolManifest {
 	for _, m := range p.Manifests.List() {
 		for _, d := range m.Destinations {
-			if d.Host == host {
+			if manifest.MatchHost(d.Host, host) {
 				return m
 			}
 		}
@@ -324,4 +333,55 @@ func (p *ConnectProxy) logProxy(target, result, reason string, start time.Time) 
 		ReasonCode: reason,
 		Duration:   time.Since(start),
 	})
+}
+
+// extractSessionIDFromProxyAuth extracts the session_id from a Proxy-Authorization
+// header carrying an attestation token. Supports two formats:
+//   - "Bearer base64(json_claims).base64(hmac)" — direct bearer token
+//   - "Basic base64(bearer:token)" — from HTTPS_PROXY URL with embedded credentials
+//
+// The attestation token format is: base64(json_claims).base64(hmac).
+// Returns "" if the header is missing, malformed, or doesn't contain a session_id.
+func extractSessionIDFromProxyAuth(header string) string {
+	if header == "" {
+		return ""
+	}
+
+	var token string
+	if len(header) > 7 && strings.EqualFold(header[:7], "bearer ") {
+		token = header[7:]
+	} else if len(header) > 6 && strings.EqualFold(header[:6], "basic ") {
+		// Decode Basic auth: base64(user:pass) where user="bearer" and pass=attestation_token
+		decoded, err := base64.StdEncoding.DecodeString(header[6:])
+		if err != nil {
+			return ""
+		}
+		parts := strings.SplitN(string(decoded), ":", 2)
+		if len(parts) != 2 {
+			return ""
+		}
+		token = parts[1]
+	} else {
+		return ""
+	}
+
+	// Token format: base64(json_claims).base64(hmac) — decode claims part
+	claimsPart := strings.SplitN(token, ".", 2)
+	if len(claimsPart) < 1 || claimsPart[0] == "" {
+		return ""
+	}
+	claimsJSON, err := base64.RawURLEncoding.DecodeString(claimsPart[0])
+	if err != nil {
+		claimsJSON, err = base64.StdEncoding.DecodeString(claimsPart[0])
+		if err != nil {
+			return ""
+		}
+	}
+	var claims struct {
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal(claimsJSON, &claims) != nil {
+		return ""
+	}
+	return claims.SessionID
 }

@@ -9,15 +9,15 @@ type ActorContext struct {
 
 // ResolveOperationRequest is the input to the ResolveOperation contract.
 type ResolveOperationRequest struct {
-	Actor                 ActorContext `json:"actor"`
-	Runner                RunnerContext       `json:"runner"`
-	ToolFamily            string              `json:"tool_family"`
-	LogicalAction         string              `json:"logical_action"`
-	Target                TargetDescriptor    `json:"target"`
-	RequestedScope        string              `json:"requested_scope"`
-	LocalFidelityRequired bool                `json:"local_fidelity_required"`
-	WriteIntent           bool                `json:"write_intent"`
-	RiskHint              string              `json:"risk_hint,omitempty"`
+	Actor                 ActorContext     `json:"actor"`
+	Runner                RunnerContext    `json:"runner"`
+	ToolFamily            string           `json:"tool_family"`
+	LogicalAction         string           `json:"logical_action"`
+	Target                TargetDescriptor `json:"target"`
+	RequestedScope        string           `json:"requested_scope"`
+	LocalFidelityRequired bool             `json:"local_fidelity_required"`
+	WriteIntent           bool             `json:"write_intent"`
+	RiskHint              string           `json:"risk_hint,omitempty"`
 }
 
 // RunnerContext identifies the calling runner session.
