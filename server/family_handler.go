@@ -23,10 +23,10 @@ func NewFamilyHandlers(registry manifest.MutableRegistry, logger *slog.Logger) *
 func (h *FamilyHandlers) ListFamilies(w http.ResponseWriter, r *http.Request) {
 	all := h.registry.List()
 	type familySummary struct {
-		Family       string                `json:"family"`
-		Version      string                `json:"version"`
-		SurfaceKind  string                `json:"surface_kind"`
-		Source       string                `json:"source"`
+		Family       string                 `json:"family"`
+		Version      string                 `json:"version"`
+		SurfaceKind  string                 `json:"surface_kind"`
+		Source       string                 `json:"source"`
 		Destinations []manifest.Destination `json:"destinations"`
 	}
 	result := make([]familySummary, 0, len(all))
