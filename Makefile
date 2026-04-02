@@ -1,4 +1,9 @@
-.PHONY: lint vet test cover build docker ci clean
+.PHONY: lint vet test cover build docker docker-build docker-push ci clean
+
+PROJECT ?= $(shell gcloud config get-value project)
+REGION  ?= us-central1
+IMAGE   := $(REGION)-docker.pkg.dev/$(PROJECT)/capsule/access-plane
+TAG     ?= latest
 
 lint:
 	golangci-lint run ./...
@@ -18,6 +23,12 @@ build:
 
 docker:
 	docker build -t capsule-access-plane .
+
+docker-build:
+	docker build --platform linux/amd64 -t $(IMAGE):$(TAG) .
+
+docker-push: docker-build
+	docker push $(IMAGE):$(TAG)
 
 ci: lint vet test build
 
