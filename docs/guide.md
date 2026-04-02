@@ -52,23 +52,64 @@ Sessions without a policy are denied all access. This is the enforcement point �
 
 ### How It All Fits Together
 
+```mermaid
+sequenceDiagram
+    participant Caller as External Caller
+    participant CP as Control Plane
+    participant AP as Access Plane
+    participant VM as Firecracker VM
+    participant GH as GitHub / GCP
+
+    Caller->>CP: POST /runners/allocate<br/>{workload_key, family_tokens: {github_rest: "ghs_..."}}
+    CP->>CP: Resolve workload config<br/>(families: github_rest, gcp_cli_read)
+    CP->>AP: POST /v1/sessions/{id}/policy<br/>{github_rest: {token}, gcp_cli_read: {}}
+    AP-->>CP: 200 OK
+    CP->>VM: Allocate runner on host<br/>(MMDS: proxy addr, attestation token)
+    CP-->>Caller: {runner_id, session_id}
+
+    Note over VM: VM boots, thaw agent runs
+    VM->>AP: GET /v1/ca.pem
+    AP-->>VM: CA certificate (for SSL bump)
+    VM->>AP: GET /v1/phantom-env?session_id=...
+    AP-->>VM: {GH_TOKEN: "phantom", CLOUDSDK_AUTH_ACCESS_TOKEN: "phantom"}
+    Note over VM: Sets HTTPS_PROXY=bearer:TOKEN@AP:3128
+
+    VM->>AP: CONNECT api.github.com:443<br/>(via HTTPS_PROXY)
+    AP->>AP: Extract session_id from token<br/>Check policy → github_rest allowed<br/>SSL bump → inject real token
+    AP->>GH: GET /repos/org/repo<br/>Authorization: Bearer ghs_...
+    GH-->>AP: 200 {repo data}
+    AP-->>VM: {repo data}
+
+    VM->>AP: CONNECT evil.com:443
+    AP->>AP: Check policy → no family allows evil.com
+    AP-->>VM: 403 Forbidden
 ```
-┌──────────────────┐     ┌───────────────────────┐     ┌──────────────┐
-│  Control Plane   │     │     Access Plane       │     │   External   │
-│                  │     │                        │     │   Services   │
-│  1. Allocate     │────►│  2. Session policy set │     │              │
-│     runner       │     │     (families+creds)   │     │  GitHub      │
-│                  │     │                        │     │  GCP         │
-│  Config has:     │     │  3. VM boots, proxy    │     │  Slack       │
-│  families:       │     │     set, phantom env   │     │              │
-│    github_rest   │     │     fetched            │     │              │
-│    gcp_cli_read  │     │                        │     │              │
-│                  │     │  4. VM makes HTTPS     │────►│              │
-│                  │     │     request through     │     │              │
-│                  │     │     CONNECT proxy       │◄───│              │
-│                  │     │     → credential inject │     │              │
-│                  │     │     → response to VM    │     │              │
-└──────────────────┘     └───────────────────────┘     └──────────────┘
+
+```mermaid
+graph TB
+    subgraph "Control Plane (central)"
+        LC[Layered Config<br/>families: github_rest, gcp_cli_read]
+        SCHED[Scheduler]
+    end
+
+    subgraph "Access Plane (per project)"
+        REG[Family Registry<br/>YAML base + dynamic API]
+        PROV[Provider Registry<br/>delegated, gcp-sa, static]
+        PS[Session Policy Store<br/>session → allowed families]
+        PROXY[CONNECT Proxy :3128<br/>SSL bump + credential injection]
+    end
+
+    subgraph "Firecracker VM"
+        AGENT[Agent / CLI tools]
+    end
+
+    LC -->|pushSessionPolicy| PS
+    SCHED -->|allocate + push policy| PS
+    AGENT -->|HTTPS_PROXY| PROXY
+    PROXY -->|check policy| PS
+    PROXY -->|lookup family| REG
+    PROXY -->|resolve credential| PROV
+    PROXY -->|inject token| EXT[External APIs]
 ```
 
 ---
