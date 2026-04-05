@@ -9,15 +9,43 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rahul-roy-glean/capsule-access-plane/identity"
 	"github.com/rahul-roy-glean/capsule-access-plane/providers"
 )
+
+func tokenTestSignToken(t *testing.T) string {
+	t.Helper()
+	claims := &identity.Claims{
+		RunnerID:    "runner-1",
+		SessionID:   "session-1",
+		WorkloadKey: "workload-1",
+		HostID:      "host-1",
+		IssuedAt:    time.Now().Add(-time.Minute),
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}
+	token, err := identity.SignClaims(claims, handlerTestSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+func setupTokenHandlers(t *testing.T, reg *providers.Registry) *TokenHandlers {
+	t.Helper()
+	verifier, err := identity.NewHMACVerifier(handlerTestSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewTokenHandlers(reg, verifier)
+}
 
 func TestUpdateToken_GlobalSuccess(t *testing.T) {
 	dp := providers.NewDelegatedProvider("mytoken", []string{"api.example.com"})
 	reg := providers.NewRegistry()
 	_ = reg.Register(dp)
 
-	handler := NewTokenHandlers(reg)
+	handler := setupTokenHandlers(t, reg)
+	token := tokenTestSignToken(t)
 
 	body, _ := json.Marshal(TokenUpdateRequest{
 		Provider:  "mytoken",
@@ -27,6 +55,7 @@ func TestUpdateToken_GlobalSuccess(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/v1/providers/update-token", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
 	rr := httptest.NewRecorder()
 
 	handler.UpdateToken(rr, req)
@@ -45,7 +74,8 @@ func TestUpdateToken_SessionScoped(t *testing.T) {
 	reg := providers.NewRegistry()
 	_ = reg.Register(dp)
 
-	handler := NewTokenHandlers(reg)
+	handler := setupTokenHandlers(t, reg)
+	token := tokenTestSignToken(t)
 
 	body, _ := json.Marshal(TokenUpdateRequest{
 		Provider:  "github",
@@ -59,6 +89,7 @@ func TestUpdateToken_SessionScoped(t *testing.T) {
 	})
 
 	req := httptest.NewRequest("POST", "/v1/providers/update-token", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
 	rr := httptest.NewRecorder()
 	handler.UpdateToken(rr, req)
 
@@ -79,7 +110,8 @@ func TestUpdateToken_SessionScoped(t *testing.T) {
 
 func TestUpdateToken_UnknownProvider(t *testing.T) {
 	reg := providers.NewRegistry()
-	handler := NewTokenHandlers(reg)
+	handler := setupTokenHandlers(t, reg)
+	token := tokenTestSignToken(t)
 
 	body, _ := json.Marshal(TokenUpdateRequest{
 		Provider: "nonexistent",
@@ -87,6 +119,7 @@ func TestUpdateToken_UnknownProvider(t *testing.T) {
 	})
 
 	req := httptest.NewRequest("POST", "/v1/providers/update-token", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
 	rr := httptest.NewRecorder()
 	handler.UpdateToken(rr, req)
 
@@ -100,7 +133,8 @@ func TestUpdateToken_NotDelegated(t *testing.T) {
 	reg := providers.NewRegistry()
 	_ = reg.Register(fp)
 
-	handler := NewTokenHandlers(reg)
+	handler := setupTokenHandlers(t, reg)
+	token := tokenTestSignToken(t)
 
 	body, _ := json.Marshal(TokenUpdateRequest{
 		Provider: "static-one",
@@ -108,6 +142,7 @@ func TestUpdateToken_NotDelegated(t *testing.T) {
 	})
 
 	req := httptest.NewRequest("POST", "/v1/providers/update-token", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
 	rr := httptest.NewRecorder()
 	handler.UpdateToken(rr, req)
 
@@ -118,15 +153,56 @@ func TestUpdateToken_NotDelegated(t *testing.T) {
 
 func TestUpdateToken_MissingFields(t *testing.T) {
 	reg := providers.NewRegistry()
-	handler := NewTokenHandlers(reg)
+	handler := setupTokenHandlers(t, reg)
+	token := tokenTestSignToken(t)
 
 	body, _ := json.Marshal(TokenUpdateRequest{Provider: "x"})
 	req := httptest.NewRequest("POST", "/v1/providers/update-token", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
 	rr := httptest.NewRecorder()
 	handler.UpdateToken(rr, req)
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestUpdateToken_MissingAuth(t *testing.T) {
+	reg := providers.NewRegistry()
+	handler := setupTokenHandlers(t, reg)
+
+	body, _ := json.Marshal(TokenUpdateRequest{
+		Provider: "mytoken",
+		Token:    "tok",
+	})
+
+	req := httptest.NewRequest("POST", "/v1/providers/update-token", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.UpdateToken(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rr.Code)
+	}
+}
+
+func TestUpdateToken_InvalidToken(t *testing.T) {
+	reg := providers.NewRegistry()
+	handler := setupTokenHandlers(t, reg)
+
+	body, _ := json.Marshal(TokenUpdateRequest{
+		Provider: "mytoken",
+		Token:    "tok",
+	})
+
+	req := httptest.NewRequest("POST", "/v1/providers/update-token", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer invalid.token")
+	rr := httptest.NewRecorder()
+	handler.UpdateToken(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rr.Code)
 	}
 }
 

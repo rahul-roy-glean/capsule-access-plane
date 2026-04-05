@@ -124,7 +124,7 @@ func main() {
 	resolveHandler := server.NewResolveHandler(verifier, engine, implAvailability, logger)
 	grantHandlers := server.NewGrantHandlers(verifier, grantService, adapter, providerRegistry, registry, logger)
 	executeHandler := server.NewExecuteHandler(verifier, registry, engine, providerRegistry, logger)
-	tokenHandlers := server.NewTokenHandlers(providerRegistry)
+	tokenHandlers := server.NewTokenHandlers(providerRegistry, verifier)
 	phantomHandlers := server.NewPhantomHandlers(registry)
 
 	mux := http.NewServeMux()

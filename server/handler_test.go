@@ -15,7 +15,7 @@ import (
 	"github.com/rahul-roy-glean/capsule-access-plane/policy"
 )
 
-var handlerTestSecret = []byte("handler-test-secret")
+var handlerTestSecret = []byte("handler-test-secret-32bytes-ok!!")
 
 func setupHandler(t *testing.T) (*ResolveHandler, *identity.HMACVerifier) {
 	t.Helper()

@@ -11,8 +11,8 @@ import (
 // SignClaims produces an HMAC-SHA256 signed token from the given claims.
 // Format: base64(json_payload).base64(hmac_signature)
 func SignClaims(claims *Claims, secret []byte) (string, error) {
-	if len(secret) == 0 {
-		return "", fmt.Errorf("identity: secret must not be empty")
+	if len(secret) < 32 {
+		return "", fmt.Errorf("identity: secret must be at least 32 bytes (got %d)", len(secret))
 	}
 
 	payload, err := json.Marshal(claims)
