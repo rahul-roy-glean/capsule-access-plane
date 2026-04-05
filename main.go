@@ -12,6 +12,7 @@ import (
 
 	"github.com/rahul-roy-glean/capsule-access-plane/accessplane"
 	"github.com/rahul-roy-glean/capsule-access-plane/grants"
+	"github.com/rahul-roy-glean/capsule-access-plane/icap"
 	"github.com/rahul-roy-glean/capsule-access-plane/identity"
 	"github.com/rahul-roy-glean/capsule-access-plane/manifest"
 	"github.com/rahul-roy-glean/capsule-access-plane/policy"
@@ -185,6 +186,22 @@ func main() {
 			}
 		}()
 		defer func() { _ = connectProxy.Close() }()
+	}
+
+	// Start ICAP server if ICAP_ADDR is set.
+	if icapAddr := os.Getenv("ICAP_ADDR"); icapAddr != "" {
+		icapServer := &icap.Server{
+			Manifests: registry,
+			Providers: providerRegistry,
+			Logger:    logger,
+		}
+		go func() {
+			slog.Info("starting ICAP server", "addr", icapAddr)
+			if err := icapServer.ListenAndServe(icapAddr); err != nil {
+				slog.Error("ICAP server error", "err", err)
+			}
+		}()
+		defer func() { _ = icapServer.Close() }()
 	}
 
 	go func() {
