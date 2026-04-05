@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -181,14 +182,15 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SSRF protection — reject private/loopback IPs.
+	// SSRF protection — reject private/loopback IPs and pin resolved IPs.
 	dest := manifest.FindDestination(h.destinations, targetHost)
 	var allowedCIDRs []string
 	if dest != nil {
 		allowedCIDRs = dest.AllowedIPs
 	}
-	if err := manifest.CheckSSRF(targetHost, allowedCIDRs); err != nil {
-		http.Error(w, "SSRF: "+err.Error(), http.StatusForbidden)
+	resolvedIPs, ssrfErr := manifest.CheckSSRF(targetHost, allowedCIDRs)
+	if ssrfErr != nil {
+		http.Error(w, "SSRF: "+ssrfErr.Error(), http.StatusForbidden)
 		return
 	}
 
@@ -222,8 +224,23 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Inject credential.
 	outReq.Header.Set("Authorization", "Bearer "+h.credential)
 
-	// Forward request.
-	client := &http.Client{Timeout: 30 * time.Second}
+	// Determine the port for pinned dialing.
+	targetPort := "443"
+	if parsedURL, parseErr := url.Parse(targetURL); parseErr == nil {
+		if p := parsedURL.Port(); p != "" {
+			targetPort = p
+		} else if parsedURL.Scheme == "http" {
+			targetPort = "80"
+		}
+	}
+
+	// Use pinned IPs from SSRF check to prevent DNS rebinding.
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext: manifest.PinnedDialer(resolvedIPs, targetPort),
+		},
+	}
 	resp, err := client.Do(outReq)
 	if err != nil {
 		http.Error(w, "proxy request failed: "+err.Error(), http.StatusBadGateway)
