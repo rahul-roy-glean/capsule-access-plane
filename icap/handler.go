@@ -58,7 +58,7 @@ func (s *Server) handleREQMOD(req *ICAPRequest) *ICAPResponse {
 	if dest != nil {
 		allowedCIDRs = dest.AllowedIPs
 	}
-	if err := manifest.CheckSSRF(host, allowedCIDRs); err != nil {
+	if _, err := manifest.CheckSSRF(host, allowedCIDRs); err != nil {
 		s.Logger.Info("REQMOD: SSRF denied", "host", host, "err", err)
 		return denyHTTPResponse(http.StatusForbidden, "SSRF: "+err.Error())
 	}
@@ -109,10 +109,8 @@ func (s *Server) handleREQMOD(req *ICAPRequest) *ICAPResponse {
 // isHostAllowed checks if any manifest destination includes this host.
 func (s *Server) isHostAllowed(host string) bool {
 	for _, m := range s.Manifests.List() {
-		for _, d := range m.Destinations {
-			if d.Host == host {
-				return true
-			}
+		if manifest.MatchesHost(m.Destinations, host) {
+			return true
 		}
 	}
 	return false
@@ -131,10 +129,8 @@ func (s *Server) findDestination(host string) *manifest.Destination {
 // findManifestForHost finds the manifest that contains a destination for this host.
 func (s *Server) findManifestForHost(host string) *manifest.ToolManifest {
 	for _, m := range s.Manifests.List() {
-		for _, d := range m.Destinations {
-			if d.Host == host {
-				return m
-			}
+		if manifest.MatchesHost(m.Destinations, host) {
+			return m
 		}
 	}
 	return nil

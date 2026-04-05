@@ -11,7 +11,7 @@ import (
 	"github.com/rahul-roy-glean/capsule-access-plane/identity"
 )
 
-var sessionTestSecret = []byte("session-test-secret")
+var sessionTestSecret = []byte("session-test-secret-32bytes-ok!!")
 
 func setupSessionHandlers(t *testing.T) (*SessionHandlers, *identity.HMACVerifier) {
 	t.Helper()
