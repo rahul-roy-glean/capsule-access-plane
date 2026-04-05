@@ -153,7 +153,7 @@ func (a *DirectHTTPAdapter) ProxyAddr(grantID string) string {
 // proxyHandler is the HTTP handler that forwards requests with credential injection.
 type proxyHandler struct {
 	credential        string
-	allowedHosts      map[string]bool
+	allowedHosts      *manifest.HostMatcher
 	destinations      []manifest.Destination
 	methodConstraints []manifest.MethodConstraint
 }
@@ -176,7 +176,7 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate destination.
-	if !h.allowedHosts[targetHost] {
+	if !h.allowedHosts.Matches(targetHost) {
 		http.Error(w, fmt.Sprintf("destination %s not allowed by manifest", targetHost), http.StatusForbidden)
 		return
 	}

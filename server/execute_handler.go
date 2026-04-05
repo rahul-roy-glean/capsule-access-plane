@@ -91,7 +91,7 @@ func (h *ExecuteHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	allowedHosts := manifest.BuildAllowedHosts(m.Destinations)
-	if !allowedHosts[targetHost] {
+	if !allowedHosts.Matches(targetHost) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": fmt.Sprintf("destination %s not allowed by manifest", targetHost),
 		})
