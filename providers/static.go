@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/rahul-roy-glean/capsule-access-plane/grants"
+	"github.com/rahul-roy-glean/capsule-access-plane/manifest"
 )
 
 // StaticProvider wraps the existing CredentialResolver (env:/literal:/stored:)
@@ -14,21 +15,17 @@ type StaticProvider struct {
 	name          string
 	credResolver  *grants.CredentialResolver
 	credentialRef string
-	hosts         map[string]bool
+	hosts         []string
 }
 
 // NewStaticProvider creates a provider that resolves credentials via the given
 // CredentialResolver and credential reference string.
 func NewStaticProvider(name string, credResolver *grants.CredentialResolver, credentialRef string, hosts []string) *StaticProvider {
-	hostSet := make(map[string]bool, len(hosts))
-	for _, h := range hosts {
-		hostSet[h] = true
-	}
 	return &StaticProvider{
 		name:          name,
 		credResolver:  credResolver,
 		credentialRef: credentialRef,
-		hosts:         hostSet,
+		hosts:         hosts,
 	}
 }
 
@@ -39,7 +36,12 @@ func (p *StaticProvider) Matches(host string) bool {
 	if len(p.hosts) == 0 {
 		return true // default provider matches all hosts
 	}
-	return p.hosts[host]
+	for _, pat := range p.hosts {
+		if manifest.MatchHostGlob(pat, host) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *StaticProvider) InjectCredentials(req *http.Request) error {

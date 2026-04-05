@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rahul-roy-glean/capsule-access-plane/manifest"
 )
 
 // OAuthJWTBearerProvider chains GCP identity token minting with OAuth JWT
@@ -22,7 +24,7 @@ import (
 //  3. Cache the resulting access token, refresh before expiry
 type OAuthJWTBearerProvider struct {
 	name           string
-	hosts          map[string]bool
+	hosts          []string
 	serviceAccount string
 	audience       string // target audience for the identity token
 	tokenEndpoint  string // target's OAuth token exchange endpoint
@@ -38,13 +40,9 @@ type OAuthJWTBearerProvider struct {
 
 // NewOAuthJWTBearerProvider creates a composite provider.
 func NewOAuthJWTBearerProvider(name, serviceAccount, audience, tokenEndpoint string, hosts []string) *OAuthJWTBearerProvider {
-	hostSet := make(map[string]bool, len(hosts))
-	for _, h := range hosts {
-		hostSet[h] = true
-	}
 	return &OAuthJWTBearerProvider{
 		name:           name,
-		hosts:          hostSet,
+		hosts:          hosts,
 		serviceAccount: serviceAccount,
 		audience:       audience,
 		tokenEndpoint:  tokenEndpoint,
@@ -58,7 +56,12 @@ func (p *OAuthJWTBearerProvider) Matches(host string) bool {
 	if len(p.hosts) == 0 {
 		return true
 	}
-	return p.hosts[host]
+	for _, pat := range p.hosts {
+		if manifest.MatchHostGlob(pat, host) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *OAuthJWTBearerProvider) InjectCredentials(req *http.Request) error {

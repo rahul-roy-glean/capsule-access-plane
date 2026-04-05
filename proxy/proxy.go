@@ -288,10 +288,8 @@ func (p *ConnectProxy) handlePlainHTTP(clientConn net.Conn, req *http.Request) {
 // isHostAllowed checks if any manifest destination includes this host.
 func (p *ConnectProxy) isHostAllowed(host string) bool {
 	for _, m := range p.Manifests.List() {
-		for _, d := range m.Destinations {
-			if d.Host == host {
-				return true
-			}
+		if manifest.MatchesHost(m.Destinations, host) {
+			return true
 		}
 	}
 	return false
@@ -310,10 +308,8 @@ func (p *ConnectProxy) findDestination(host string) *manifest.Destination {
 // findManifestForHost finds the manifest that contains a destination for this host.
 func (p *ConnectProxy) findManifestForHost(host string) *manifest.ToolManifest {
 	for _, m := range p.Manifests.List() {
-		for _, d := range m.Destinations {
-			if d.Host == host {
-				return m
-			}
+		if manifest.MatchesHost(m.Destinations, host) {
+			return m
 		}
 	}
 	return nil
