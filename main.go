@@ -120,6 +120,10 @@ func main() {
 	// Create direct HTTP proxy adapter
 	adapter := runtime.NewDirectHTTPAdapter(registry)
 
+	// Create session store and handlers
+	sessionStore := server.NewSessionStore()
+	sessionHandlers := server.NewSessionHandlers(verifier, sessionStore)
+
 	// Create handlers
 	resolveHandler := server.NewResolveHandler(verifier, engine, implAvailability, logger)
 	grantHandlers := server.NewGrantHandlers(verifier, grantService, adapter, providerRegistry, registry, logger)
@@ -149,6 +153,11 @@ func main() {
 	mux.HandleFunc("POST /v1/providers/update-token", tokenHandlers.UpdateToken)
 	mux.HandleFunc("GET /v1/phantom-env", phantomHandlers.GetPhantomEnv)
 
+	// Wire session registration endpoints
+	mux.HandleFunc("POST /v1/sessions/register", sessionHandlers.RegisterSession)
+	mux.HandleFunc("GET /v1/sessions/{session_id}", sessionHandlers.GetSession)
+	mux.HandleFunc("DELETE /v1/sessions/{session_id}", sessionHandlers.DeregisterSession)
+
 	// Remaining stubs
 	mux.HandleFunc("POST /v1/events/runner", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotImplemented, map[string]string{
@@ -165,8 +174,15 @@ func main() {
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Start CONNECT proxy if PROXY_ADDR is set.
-	if proxyAddr != "" {
+	// Determine proxy mode from environment.
+	proxyMode := os.Getenv("PROXY_MODE")
+	if proxyMode == "" && proxyAddr != "" {
+		proxyMode = "connect" // backward compatible
+	}
+
+	// Start proxy backend if configured.
+	var proxyBackend proxy.ProxyBackend
+	if proxyMode == "connect" && proxyAddr != "" {
 		ca, err := proxy.NewCertAuthority()
 		if err != nil {
 			slog.Error("failed to create CA for proxy", "err", err)
@@ -178,13 +194,12 @@ func main() {
 			Providers: providerRegistry,
 			Logger:    logger,
 		}
-		go func() {
-			slog.Info("starting CONNECT proxy", "addr", proxyAddr)
-			if err := connectProxy.ListenAndServe(proxyAddr); err != nil {
-				slog.Error("CONNECT proxy error", "err", err)
-			}
-		}()
-		defer func() { _ = connectProxy.Close() }()
+		if err := connectProxy.Start(context.Background(), proxyAddr); err != nil {
+			slog.Error("failed to start CONNECT proxy", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("started proxy backend", "mode", connectProxy.Mode(), "addr", connectProxy.Addr())
+		proxyBackend = connectProxy
 	}
 
 	go func() {
@@ -203,6 +218,11 @@ func main() {
 
 	if err := srv.Shutdown(gracefulCtx); err != nil {
 		slog.Error("shutdown error", "err", err)
+	}
+	if proxyBackend != nil {
+		if err := proxyBackend.Stop(gracefulCtx); err != nil {
+			slog.Error("proxy backend shutdown error", "err", err)
+		}
 	}
 }
 
