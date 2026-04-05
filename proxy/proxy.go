@@ -77,6 +77,28 @@ func (p *ConnectProxy) Close() error {
 	return nil
 }
 
+// Start implements ProxyBackend. It starts the CONNECT proxy on addr.
+func (p *ConnectProxy) Start(_ context.Context, addr string) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("proxy: listen: %w", err)
+	}
+	p.listener = ln
+	p.Logger.Info("proxy listening", "addr", ln.Addr().String())
+	go func() { _ = p.Serve(ln) }()
+	return nil
+}
+
+// Stop implements ProxyBackend. It gracefully shuts down the proxy.
+func (p *ConnectProxy) Stop(_ context.Context) error {
+	return p.Close()
+}
+
+// Mode implements ProxyBackend. It returns "connect".
+func (p *ConnectProxy) Mode() string {
+	return "connect"
+}
+
 func (p *ConnectProxy) handleConn(clientConn net.Conn) {
 	defer func() { _ = clientConn.Close() }()
 
