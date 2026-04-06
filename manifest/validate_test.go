@@ -22,8 +22,8 @@ func TestMatchHostGlob(t *testing.T) {
 		// Single wildcard *.suffix
 		{"*.googleapis.com", "storage.googleapis.com", true},
 		{"*.googleapis.com", "compute.googleapis.com", true},
-		{"*.googleapis.com", "googleapis.com", false},          // * requires at least one label
-		{"*.googleapis.com", "a.b.googleapis.com", false},      // * matches exactly one label
+		{"*.googleapis.com", "googleapis.com", false},     // * requires at least one label
+		{"*.googleapis.com", "a.b.googleapis.com", false}, // * matches exactly one label
 		{"*.foo.bar.com", "x.foo.bar.com", true},
 		{"*.foo.bar.com", "foo.bar.com", false},
 		{"*.foo.bar.com", "a.b.foo.bar.com", false},
@@ -31,22 +31,22 @@ func TestMatchHostGlob(t *testing.T) {
 		// Double wildcard **.suffix
 		{"**.googleapis.com", "storage.googleapis.com", true},
 		{"**.googleapis.com", "a.b.googleapis.com", true},
-		{"**.googleapis.com", "googleapis.com", true},           // ** matches zero labels
+		{"**.googleapis.com", "googleapis.com", true}, // ** matches zero labels
 		{"**.googleapis.com", "a.b.c.d.googleapis.com", true},
 		{"**.example.com", "example.com", true},
 		{"**.example.com", "sub.example.com", true},
 		{"**.example.com", "deep.sub.example.com", true},
 
 		// Edge cases
-		{"", "", true},             // empty pattern matches empty host (exact match)
-		{"", "anything", false},    // empty pattern does not match non-empty host
-		{"anything", "", false},    // non-empty pattern does not match empty host
-		{"*", "anything", false},   // bare * is not a valid wildcard prefix pattern; no "." follows
-		{"**", "anything", false},  // bare ** is not a valid wildcard prefix pattern; no "." follows
+		{"", "", true},            // empty pattern matches empty host (exact match)
+		{"", "anything", false},   // empty pattern does not match non-empty host
+		{"anything", "", false},   // non-empty pattern does not match empty host
+		{"*", "anything", false},  // bare * is not a valid wildcard prefix pattern; no "." follows
+		{"**", "anything", false}, // bare ** is not a valid wildcard prefix pattern; no "." follows
 
 		// Patterns that are NOT wildcards (no dot after *)
-		{"*foo.com", "xfoo.com", false},   // not a valid pattern — treated as literal
-		{"**foo.com", "xfoo.com", false},   // not a valid pattern — treated as literal
+		{"*foo.com", "xfoo.com", false},  // not a valid pattern — treated as literal
+		{"**foo.com", "xfoo.com", false}, // not a valid pattern — treated as literal
 
 		// Host must not partially match the suffix
 		{"*.example.com", "notexample.com", false},

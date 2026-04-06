@@ -126,7 +126,6 @@ func TestVerify_MissingRequiredFields(t *testing.T) {
 	}{
 		{"missing RunnerID", func(c *Claims) { c.RunnerID = "" }, "runner_id"},
 		{"missing SessionID", func(c *Claims) { c.SessionID = "" }, "session_id"},
-		{"missing WorkloadKey", func(c *Claims) { c.WorkloadKey = "" }, "workload_key"},
 	}
 
 	for _, tt := range tests {

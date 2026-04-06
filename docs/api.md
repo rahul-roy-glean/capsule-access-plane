@@ -334,6 +334,133 @@ proxy replaces them with real credentials at the network boundary.
 
 Runner lifecycle event ingestion. **Not yet implemented** — returns 501.
 
+## Session Registration
+
+Session registration endpoints allow the orchestrator to register sessions
+with domain-level credential routing rules. This is a higher-level abstraction
+than session policies — it maps host patterns to credential providers with
+optional identity header injection.
+
+### POST /v1/sessions/register
+
+Register a new session. Called by the orchestrator after allocating a runner.
+
+**Request:**
+
+```json
+{
+  "session_id": "sess-abc-123",
+  "user_email": "alice@company.com",
+  "runner_id": "r1",
+  "domain_rules": [
+    {
+      "host_pattern": "api.github.com",
+      "provider_name": "github",
+      "identity_headers": {
+        "X-Glean-User-Email": "alice@company.com"
+      }
+    },
+    {
+      "host_pattern": "*.googleapis.com",
+      "provider_name": "gcp"
+    }
+  ],
+  "expires_at": "2026-04-06T12:00:00Z"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `session_id` | Yes | Unique session identifier |
+| `user_email` | No | Email of the user this session acts on behalf of |
+| `runner_id` | No | Associated runner ID |
+| `domain_rules` | No | List of domain-to-provider mappings with optional identity headers |
+| `expires_at` | No | Session expiry time |
+
+**Response (201):**
+
+```json
+{
+  "status": "registered",
+  "session_id": "sess-abc-123"
+}
+```
+
+**Error codes:** 400 (missing session_id), 401 (bad token), 409 (session already registered)
+
+### GET /v1/sessions/{session_id}
+
+Get a session's registration details.
+
+**Response (200):**
+
+```json
+{
+  "session_id": "sess-abc-123",
+  "user_email": "alice@company.com",
+  "runner_id": "r1",
+  "domain_rules": [
+    {
+      "host_pattern": "api.github.com",
+      "provider_name": "github",
+      "identity_headers": {
+        "X-Glean-User-Email": "alice@company.com"
+      }
+    }
+  ],
+  "expires_at": "2026-04-06T12:00:00Z"
+}
+```
+
+**Error codes:** 400 (missing session_id), 401 (bad token), 404 (session not found)
+
+### DELETE /v1/sessions/{session_id}
+
+Deregister a session.
+
+**Response (200):**
+
+```json
+{
+  "status": "deregistered",
+  "session_id": "sess-abc-123"
+}
+```
+
+**Error codes:** 401 (bad token), 404 (session not found)
+
+## GET /v1/credentials/gcs
+
+Resolve a short-lived GCS access token. The access plane finds the provider
+that matches `storage.googleapis.com` and returns a bearer token. Useful for
+agents that need to interact with GCS via signed URLs or direct API calls
+outside the proxy.
+
+**Request:**
+
+```bash
+curl http://localhost:8080/v1/credentials/gcs \
+  -H "Authorization: Bearer <attestation-token>"
+```
+
+**Response (200):**
+
+```json
+{
+  "access_token": "ya29.a0ARrdaM...",
+  "token_type": "Bearer",
+  "expires_in": 3600
+}
+```
+
+**Error codes:**
+
+| Code | Meaning |
+|------|---------|
+| 401 | Missing or invalid attestation token |
+| 404 | No credential provider configured for `storage.googleapis.com` |
+| 500 | Failed to resolve GCS credentials |
+
 ## Family Management
 
 Dynamic family CRUD for managing API manifests at runtime. YAML-loaded families
