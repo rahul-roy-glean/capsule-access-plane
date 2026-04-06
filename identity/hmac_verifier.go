@@ -78,9 +78,6 @@ func (v *HMACVerifier) Verify(attestation string) (*Claims, error) {
 	if claims.SessionID == "" {
 		return nil, fmt.Errorf("identity: missing required field: session_id")
 	}
-	if claims.WorkloadKey == "" {
-		return nil, fmt.Errorf("identity: missing required field: workload_key")
-	}
 
 	if v.tenantID != "" && claims.TenantID != v.tenantID {
 		return nil, fmt.Errorf("identity: tenant_id mismatch: token has %q, expected %q", claims.TenantID, v.tenantID)
