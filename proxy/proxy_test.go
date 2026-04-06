@@ -55,9 +55,9 @@ func setupProxy(t *testing.T, targetHost string, allowedIPs []string) (*ConnectP
 
 	reg := manifest.NewInMemoryRegistry()
 	_ = reg.Register(&manifest.ToolManifest{
-		Family:      "test_api",
-		Version:     "1.0",
-		SurfaceKind: "http",
+		Family:         "test_api",
+		Version:        "1.0",
+		SurfaceKind:    "http",
 		SupportedLanes: []accessplane.Lane{accessplane.LaneDirectHTTP},
 		Destinations: []manifest.Destination{
 			{Host: targetHost, Port: 443, Protocol: "https", AllowedIPs: allowedIPs},
@@ -134,9 +134,9 @@ func TestProxy_CONNECT_Bump_InjectsCredential(t *testing.T) {
 	// Override manifest to allow /** for simplicity.
 	reg := manifest.NewInMemoryRegistry()
 	_ = reg.Register(&manifest.ToolManifest{
-		Family:      "test_api",
-		Version:     "1.0",
-		SurfaceKind: "http",
+		Family:         "test_api",
+		Version:        "1.0",
+		SurfaceKind:    "http",
 		SupportedLanes: []accessplane.Lane{accessplane.LaneDirectHTTP},
 		Destinations: []manifest.Destination{
 			{Host: targetHost, Port: 443, AllowedIPs: []string{"127.0.0.0/8"}},

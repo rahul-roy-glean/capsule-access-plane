@@ -20,6 +20,7 @@ import (
 	"github.com/rahul-roy-glean/capsule-access-plane/proxy"
 	"github.com/rahul-roy-glean/capsule-access-plane/runtime"
 	"github.com/rahul-roy-glean/capsule-access-plane/server"
+	"github.com/rahul-roy-glean/capsule-access-plane/session"
 	"github.com/rahul-roy-glean/capsule-access-plane/store"
 )
 
@@ -39,6 +40,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Read tenant ID for multi-tenant scoping.
+	tenantID := os.Getenv("TENANT_ID")
+
 	// Database URL (default: capsule-access.db)
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
@@ -51,6 +55,10 @@ func main() {
 		slog.Error("failed to create HMAC verifier", "err", err)
 		os.Exit(1)
 	}
+	if tenantID != "" {
+		verifier = verifier.WithTenantID(tenantID)
+		slog.Info("tenant scoping enabled", "tenant_id", tenantID)
+	}
 
 	// Open SQLite store and run migrations
 	ctx := context.Background()
@@ -62,12 +70,17 @@ func main() {
 	defer func() { _ = dataStore.Close() }()
 	slog.Info("opened SQLite store", "database", databaseURL)
 
-	// Load manifests from embedded filesystem
-	registry := manifest.NewInMemoryRegistry()
+	// Load manifests: base layer from embedded YAML, dynamic layer from SQLite
+	familyStore := manifest.NewFamilyStore(dataStore.DB())
+	registry := manifest.NewLayeredRegistry(familyStore)
 	loader := &manifest.YAMLLoader{}
 	if err := manifest.LoadAllFamilies(loader, registry); err != nil {
 		slog.Error("failed to load manifest families", "err", err)
 		os.Exit(1) //nolint:gocritic // exitAfterDefer: acceptable in main()
+	}
+	if err := registry.LoadDynamic(context.Background()); err != nil {
+		slog.Error("failed to load dynamic families", "err", err)
+		os.Exit(1)
 	}
 	slog.Info("loaded manifest families", "count", len(registry.List()))
 
@@ -121,9 +134,9 @@ func main() {
 	// Create direct HTTP proxy adapter
 	adapter := runtime.NewDirectHTTPAdapter(registry)
 
-	// Create session store and handlers
-	sessionStore := server.NewSessionStore()
-	sessionHandlers := server.NewSessionHandlers(verifier, sessionStore)
+	// Create session registration store and handlers
+	sessionRegStore := server.NewSessionStore()
+	sessionRegHandlers := server.NewSessionRegistrationHandlers(verifier, sessionRegStore)
 
 	// Create handlers
 	resolveHandler := server.NewResolveHandler(verifier, engine, implAvailability, logger)
@@ -131,6 +144,12 @@ func main() {
 	executeHandler := server.NewExecuteHandler(verifier, registry, engine, providerRegistry, logger)
 	tokenHandlers := server.NewTokenHandlers(providerRegistry, verifier)
 	phantomHandlers := server.NewPhantomHandlers(registry)
+	gcsHandlers := server.NewGCSHandlers(verifier, providerRegistry, logger)
+
+	// Session policy store and resolver for per-session dynamic policies.
+	policyStore := session.NewPolicyStore()
+	_ = session.NewResolver(policyStore, registry) // sessionResolver — used by later phases
+	sessionHandlers := server.NewSessionHandlers(policyStore, registry, providerRegistry, logger)
 
 	mux := http.NewServeMux()
 
@@ -155,9 +174,37 @@ func main() {
 	mux.HandleFunc("GET /v1/phantom-env", phantomHandlers.GetPhantomEnv)
 
 	// Wire session registration endpoints
-	mux.HandleFunc("POST /v1/sessions/register", sessionHandlers.RegisterSession)
-	mux.HandleFunc("GET /v1/sessions/{session_id}", sessionHandlers.GetSession)
-	mux.HandleFunc("DELETE /v1/sessions/{session_id}", sessionHandlers.DeregisterSession)
+	mux.HandleFunc("POST /v1/sessions/register", sessionRegHandlers.RegisterSession)
+	mux.HandleFunc("GET /v1/sessions/{session_id}", sessionRegHandlers.GetSession)
+	mux.HandleFunc("DELETE /v1/sessions/{session_id}", sessionRegHandlers.DeregisterSession)
+
+	// Wire GCS credential endpoint
+	mux.HandleFunc("GET /v1/credentials/gcs", gcsHandlers.GetCredentials)
+
+	// Family CRUD endpoints
+	familyHandlers := server.NewFamilyHandlers(registry, logger)
+	mux.HandleFunc("GET /v1/families", familyHandlers.ListFamilies)
+	mux.HandleFunc("GET /v1/families/{name}", familyHandlers.GetFamily)
+	mux.HandleFunc("POST /v1/families", familyHandlers.CreateFamily)
+	mux.HandleFunc("DELETE /v1/families/{name}", familyHandlers.DeleteFamily)
+
+	// Session policy endpoints
+	mux.HandleFunc("POST /v1/sessions/{session_id}/policy", sessionHandlers.SetPolicy)
+	mux.HandleFunc("GET /v1/sessions/{session_id}/policy", sessionHandlers.GetPolicy)
+	mux.HandleFunc("DELETE /v1/sessions/{session_id}/policy", sessionHandlers.DeletePolicy)
+
+	// CA cert endpoint — serves the CONNECT proxy's CA cert in PEM format.
+	// VMs fetch this to install in their trust store for SSL bump.
+	// Populated after the proxy starts (nil until then).
+	var caCertPEM []byte
+	mux.HandleFunc("GET /v1/ca.pem", func(w http.ResponseWriter, r *http.Request) {
+		if len(caCertPEM) == 0 {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "CONNECT proxy not enabled"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-pem-file")
+		w.Write(caCertPEM)
+	})
 
 	// Remaining stubs
 	mux.HandleFunc("POST /v1/events/runner", func(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +236,7 @@ func main() {
 			slog.Error("failed to create CA for proxy", "err", err)
 			os.Exit(1)
 		}
+		caCertPEM = ca.CACertPEM()
 		connectProxy := &proxy.ConnectProxy{
 			CA:        ca,
 			Manifests: registry,

@@ -29,13 +29,14 @@ func (l *YAMLLoader) Load(data []byte) (*ToolManifest, error) {
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("yaml unmarshal: %w", err)
 	}
-	if err := validate(&m); err != nil {
+	if err := Validate(&m); err != nil {
 		return nil, err
 	}
 	return &m, nil
 }
 
-func validate(m *ToolManifest) error {
+// Validate checks a ToolManifest for structural correctness.
+func Validate(m *ToolManifest) error {
 	if m.Family == "" {
 		return fmt.Errorf("manifest validation: family must not be empty")
 	}

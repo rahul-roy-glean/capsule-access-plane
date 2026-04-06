@@ -23,10 +23,44 @@ destinations:
   - host: api.github.com
     port: 443
     protocol: https
+  - host: github.com
+    port: 443
+    protocol: https
+phantom_env:
+  GH_TOKEN: "phantom"
+  GITHUB_TOKEN: "phantom"
 method_constraints:
+  # GraphQL (gh CLI uses this for most operations)
+  - method: POST
+    path_pattern: "/graphql"
+  # Repos
   - method: GET
     path_pattern: "/repos/**"
   - method: POST
     path_pattern: "/repos/*/issues"
+  - method: POST
+    path_pattern: "/repos/*/issues/*/comments"
+  - method: POST
+    path_pattern: "/repos/*/pulls"
   - method: PUT
     path_pattern: "/repos/*/pulls/*/merge"
+  - method: PATCH
+    path_pattern: "/repos/*/pulls/*"
+  - method: PATCH
+    path_pattern: "/repos/*/issues/*"
+  # User/org context (gh repo list, gh auth status)
+  - method: GET
+    path_pattern: "/user"
+  - method: GET
+    path_pattern: "/user/**"
+  - method: GET
+    path_pattern: "/users/**"
+  - method: GET
+    path_pattern: "/orgs/**"
+  - method: GET
+    path_pattern: "/installation/repositories"
+  # Git operations
+  - method: GET
+    path_pattern: "/repos/*/git/**"
+  - method: POST
+    path_pattern: "/repos/*/git/**"

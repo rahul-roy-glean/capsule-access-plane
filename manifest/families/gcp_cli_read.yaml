@@ -11,11 +11,23 @@ logical_actions:
 supported_lanes:
   - remote_execution
   - helper_session
+  - direct_http
 preferred_lane:
-  default: remote_execution
+  default: direct_http
+auth_patterns:
+  - bearer_token
 binary_matchers:
   - gcloud
   - gsutil
+destinations:
+  - host: "*.googleapis.com"
+    port: 443
+    protocol: https
 phantom_env:
   CLOUDSDK_AUTH_ACCESS_TOKEN: "phantom"
   CLOUDSDK_CORE_PROJECT: "phantom"
+method_constraints:
+  - method: GET
+    path_pattern: "/**"
+  - method: POST
+    path_pattern: "/**"

@@ -246,3 +246,10 @@ func FindDestination(destinations []Destination, host string) *Destination {
 	}
 	return nil
 }
+
+// MatchHost checks if a host matches a pattern. Supports exact match,
+// single wildcard "*." prefix, and double wildcard "**." prefix.
+// This delegates to MatchHostGlob for full glob support.
+func MatchHost(pattern, host string) bool {
+	return MatchHostGlob(pattern, host)
+}

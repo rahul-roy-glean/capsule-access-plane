@@ -9,12 +9,12 @@ type PolicyEngine interface {
 
 // PolicyInput contains all context needed for a policy decision.
 type PolicyInput struct {
-	Actor                      ActorContext                                    `json:"actor"`
-	ToolFamily                 string                                         `json:"tool_family"`
-	LogicalAction              string                                         `json:"logical_action"`
-	RiskClass                  string                                         `json:"risk_class"`
-	Target                     accessplane.TargetDescriptor                   `json:"target"`
-	LocalFidelityRequired      bool                                           `json:"local_fidelity_required"`
-	Environment                string                                         `json:"environment"`
+	Actor                      ActorContext                                         `json:"actor"`
+	ToolFamily                 string                                               `json:"tool_family"`
+	LogicalAction              string                                               `json:"logical_action"`
+	RiskClass                  string                                               `json:"risk_class"`
+	Target                     accessplane.TargetDescriptor                         `json:"target"`
+	LocalFidelityRequired      bool                                                 `json:"local_fidelity_required"`
+	Environment                string                                               `json:"environment"`
 	ImplementationAvailability map[accessplane.Lane]accessplane.ImplementationState `json:"implementation_availability"`
 }

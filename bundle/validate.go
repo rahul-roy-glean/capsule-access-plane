@@ -63,8 +63,8 @@ func Validate(bundle *ProjectionBundle) error {
 // look like embedded credentials or tokens.
 func checkForSecrets(b *ProjectionBundle) error {
 	fields := map[string]string{
-		"grant_id":                 b.GrantID,
-		"audit_metadata.user_id":  b.AuditMetadata.UserID,
+		"grant_id":                  b.GrantID,
+		"audit_metadata.user_id":    b.AuditMetadata.UserID,
 		"audit_metadata.session_id": b.AuditMetadata.SessionID,
 		"audit_metadata.runner_id":  b.AuditMetadata.RunnerID,
 		"audit_metadata.turn_id":    b.AuditMetadata.TurnID,

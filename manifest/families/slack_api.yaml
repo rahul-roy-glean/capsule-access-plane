@@ -1,0 +1,26 @@
+family: slack_api
+version: "1.0"
+surface_kind: http
+logical_actions:
+  - name: send_message
+    risk_class: standard
+    write: true
+  - name: read_channel
+    risk_class: standard
+    write: false
+supported_lanes:
+  - direct_http
+  - remote_execution
+preferred_lane:
+  default: direct_http
+auth_patterns:
+  - bearer_token
+destinations:
+  - host: "*.slack.com"
+    port: 443
+    protocol: https
+method_constraints:
+  - method: GET
+    path_pattern: "/**"
+  - method: POST
+    path_pattern: "/**"

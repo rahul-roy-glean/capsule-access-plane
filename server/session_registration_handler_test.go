@@ -13,7 +13,7 @@ import (
 
 var sessionTestSecret = []byte("session-test-secret-32bytes-ok!!")
 
-func setupSessionHandlers(t *testing.T) (*SessionHandlers, *identity.HMACVerifier) {
+func setupSessionHandlers(t *testing.T) (*SessionRegistrationHandlers, *identity.HMACVerifier) {
 	t.Helper()
 
 	verifier, err := identity.NewHMACVerifier(sessionTestSecret)
@@ -22,7 +22,7 @@ func setupSessionHandlers(t *testing.T) (*SessionHandlers, *identity.HMACVerifie
 	}
 
 	store := NewSessionStore()
-	handlers := NewSessionHandlers(verifier, store)
+	handlers := NewSessionRegistrationHandlers(verifier, store)
 	return handlers, verifier
 }
 
