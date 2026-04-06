@@ -7,30 +7,17 @@ agent can see, and what level of control the access plane retains.
 
 ## Lane Comparison
 
-```text
-                     ┌──────────────────┬────────────────────┬──────────────────┐
-                     │ Remote Execution │ Direct HTTP        │ Helper Session   │
-                     │ (Lane 1)         │ (Lane 2)           │ (Lane 3)         │
-┌────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Credential visible │ No               │ No — injected on   │ In helper only   │
-│ to agent?          │                  │ outbound leg only  │                  │
-├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Agent makes own    │ No               │ Yes (HTTPS_PROXY    │ Yes (via CLI)    │
-│ HTTP calls?        │                  │  or grant proxy)    │                  │
-├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Streaming support  │ No (sync req/res)│ Yes (full proxy)    │ Yes (native CLI) │
-├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ SSRF protection    │ Yes              │ Yes                 │ N/A              │
-├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Path enforcement   │ Yes (glob)       │ Yes (glob)          │ N/A              │
-├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Surface kind       │ http             │ http                │ cli              │
-├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Audit granularity  │ Per-request      │ Per-request         │ Per-session      │
-├────────────────────┼──────────────────┼────────────────────┼──────────────────┤
-│ Status             │ Implemented      │ Implemented         │ Not implemented  │
-└────────────────────┴──────────────────┴────────────────────┴──────────────────┘
-```
+| | Remote Execution (Lane 1) | Direct HTTP (Lane 2) | Helper Session (Lane 3) |
+|---|---|---|---|
+| Credential visible to agent? | No | No — injected on outbound leg only | In helper only |
+| Agent makes own HTTP calls? | No | Yes (HTTPS_PROXY or grant proxy) | Yes (via CLI) |
+| Streaming support | No (sync req/res) | Yes (full proxy) | Yes (native CLI) |
+| SSRF protection | Yes | Yes | N/A |
+| Path enforcement | Yes (glob) | Yes (glob) | N/A |
+| Surface kind | http | http | cli |
+| Audit granularity | Per-request | Per-request | Per-session |
+| Proxy modes | N/A | CONNECT proxy, ICAP/Squid, grant proxy | N/A |
+| Status | Implemented | Implemented | Not implemented |
 
 ## Lane 1: Remote Execution
 
@@ -40,27 +27,21 @@ The agent sends the full HTTP request parameters (method, URL, headers, body)
 to the access plane. The access plane validates everything, injects the
 credential, makes the outbound call, and returns the complete response.
 
-```text
-Agent                    Access Plane                External API
-  │                          │                           │
-  │ POST /v1/execute/http    │                           │
-  │ {method, url, headers}   │                           │
-  │─────────────────────────►│                           │
-  │                          │ validate manifest         │
-  │                          │ SSRF check                │
-  │                          │ enforce method + path     │
-  │                          │ evaluate policy           │
-  │                          │ resolve credential        │
-  │                          │                           │
-  │                          │ GET https://api.github.com│
-  │                          │ Authorization: Bearer *** │
-  │                          │──────────────────────────►│
-  │                          │◄──────────────────────────│
-  │                          │ 200 + response body       │
-  │                          │                           │
-  │◄─────────────────────────│                           │
-  │ {status_code, headers,   │                           │
-  │  body, correlation_id}   │                           │
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant AP as Access Plane
+    participant EXT as External API
+
+    Agent->>AP: POST /v1/execute/http<br/>{method, url, headers}
+    AP->>AP: Validate manifest
+    AP->>AP: SSRF check
+    AP->>AP: Enforce method + path
+    AP->>AP: Evaluate policy
+    AP->>AP: Resolve credential
+    AP->>EXT: GET https://api.github.com<br/>Authorization: Bearer ***
+    EXT-->>AP: 200 + response body
+    AP-->>Agent: {status_code, headers, body, correlation_id}
 ```
 
 **When to use:** Default for HTTP-surface tools. Best credential isolation.
@@ -77,20 +58,19 @@ Two modes are available:
 The VM sets `HTTPS_PROXY` and makes standard HTTPS calls. The access plane
 proxy intercepts CONNECT requests and selectively MITM's them.
 
-```text
-VM                       Access Plane Proxy           External API
-  │                          │                           │
-  │ CONNECT host:443         │                           │
-  │─────────────────────────►│                           │
-  │◄─ 200 Established ──────│                           │
-  │                          │                           │
-  │◄── TLS handshake ──────►│ (CA-signed leaf cert)     │
-  │                          │                           │
-  │── GET /repos/foo ───────►│                           │
-  │                          │── GET /repos/foo ────────►│
-  │                          │   + Bearer token          │
-  │                          │◄─────────────────────────│
-  │◄─────────────────────────│                           │
+```mermaid
+sequenceDiagram
+    participant VM
+    participant AP as Access Plane Proxy
+    participant EXT as External API
+
+    VM->>AP: CONNECT host:443
+    AP-->>VM: 200 Established
+    Note over VM,AP: TLS handshake (CA-signed leaf cert)
+    VM->>AP: GET /repos/foo
+    AP->>EXT: GET /repos/foo + Bearer token
+    EXT-->>AP: Response
+    AP-->>VM: Response
 ```
 
 **Selective bump:** Only hosts with a credential provider are MITM'd. Other
@@ -105,21 +85,52 @@ with no code changes. Best for transparent credential injection at scale.
 The agent requests a grant, receives a local proxy address, and sends requests
 with `X-Target-URL` headers.
 
-```text
-Agent                    Proxy (localhost:N)          External API
-  │ POST /v1/grants/project                              │
-  │─────────────────────►│ start proxy                   │
-  │◄─────────────────────│ projection_ref=:54321         │
-  │                      │                               │
-  │ GET localhost:54321  │                               │
-  │ X-Target-URL: https://api.github.com/repos/foo       │
-  │─────────────────────►│ validate + SSRF + inject      │
-  │                      │──────────────────────────────►│
-  │◄─────────────────────│◄──────────────────────────────│
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant Proxy as Proxy (localhost:N)
+    participant EXT as External API
+
+    Agent->>Proxy: POST /v1/grants/project
+    Proxy-->>Agent: projection_ref=:54321
+    Agent->>Proxy: GET localhost:54321<br/>X-Target-URL: https://api.github.com/repos/foo
+    Proxy->>Proxy: Validate + SSRF + inject
+    Proxy->>EXT: Forward request
+    EXT-->>Proxy: Response
+    Proxy-->>Agent: Response
 ```
 
 **When to use:** When the agent needs explicit grant lifecycle control
 (project, exchange, refresh, revoke) or when the CONNECT proxy is not available.
+
+### ICAP/Squid Integration
+
+For deployments that already use Squid as their HTTP proxy, the access plane
+provides an ICAP REQMOD server that integrates with Squid's request adaptation
+framework. Squid forwards HTTP requests to the ICAP server, which validates
+them against manifests and injects credentials before Squid forwards the
+request to the target.
+
+```mermaid
+sequenceDiagram
+    participant VM as VM Agent
+    participant Squid
+    participant ICAP as ICAP Server<br/>(Access Plane)
+    participant EXT as External API
+
+    VM->>Squid: HTTP request via proxy
+    Squid->>ICAP: REQMOD (encapsulated request)
+    ICAP->>ICAP: Validate host + SSRF + method/path
+    ICAP->>ICAP: Inject credentials
+    ICAP-->>Squid: Modified request (or 403 deny)
+    Squid->>EXT: Forward modified request
+    EXT-->>Squid: Response
+    Squid-->>VM: Response
+```
+
+**When to use:** When Squid is already deployed as the network proxy and you
+want to avoid running a separate CONNECT proxy. Configured via `ICAP_ADDR`
+environment variable.
 
 ## Lane 3: Helper Session (not yet implemented)
 
@@ -139,16 +150,23 @@ The policy engine selects the lane for each request based on:
 The selection happens during `/v1/resolve`. The agent then uses the appropriate
 endpoint for the selected lane.
 
-```text
-Manifest says:
-  preferred_lane:
-    default: direct_http        ← standard risk uses proxy
-    elevated: remote_execution  ← elevated risk uses broker
+```mermaid
+flowchart TD
+    A["Manifest preferred_lane"] --> B{"Preferred lane for<br/>resolved risk class?"}
+    B -->|"Yes"| C["Use risk-class lane"]
+    B -->|"No"| D{"preferred_lane.default<br/>set?"}
+    D -->|"Yes"| E["Use default lane"]
+    D -->|"No"| F["Use first entry in<br/>supported_lanes"]
+    C --> G["Check implementation<br/>availability"]
+    E --> G
+    F --> G
+    G --> H["Return selected lane +<br/>implementation state"]
+```
 
-Policy engine:
-  1. Look up preferred lane for the resolved risk class
-  2. Fall back to preferred_lane.default
-  3. Fall back to first entry in supported_lanes
-  4. Check implementation_availability map
-  5. Return selected lane + implementation state
+Example manifest:
+
+```yaml
+preferred_lane:
+  default: direct_http        # standard risk uses proxy
+  elevated: remote_execution  # elevated risk uses broker
 ```

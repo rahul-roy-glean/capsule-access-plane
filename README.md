@@ -33,20 +33,25 @@ The access plane eliminates this class of risk:
 
 ## How It Works
 
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                     Capsule microVM                             │
-│                                                                 │
-│  Agent ──► HTTPS_PROXY=172.16.0.1:3128                          │
-│            curl https://api.github.com/repos/foo/bar            │
-│                 └── CONNECT proxy: SSL bump, inject credential  │
-│                                                                 │
-│  Agent ──► POST /v1/execute/http ──► access plane makes the     │
-│            call, returns response ──► agent never sees token     │
-│                                                                 │
-│  Agent ──► POST /v1/grants/project ──► proxy on :54321          │
-│            sandbox calls proxy ──► proxy injects credential      │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph VM["Capsule microVM"]
+        A1["Agent<br/>HTTPS_PROXY=172.16.0.1:3128"]
+        A2["Agent<br/>POST /v1/execute/http"]
+        A3["Agent<br/>POST /v1/grants/project"]
+    end
+
+    subgraph AP["Access Plane"]
+        P["CONNECT Proxy<br/>SSL bump + inject credential"]
+        E["Execute Handler<br/>makes call, returns response"]
+        G["Grant Proxy<br/>localhost:54321"]
+    end
+
+    EXT["External APIs<br/>github.com, googleapis.com"]
+
+    A1 -->|"CONNECT"| P --> EXT
+    A2 -->|"broker request"| E --> EXT
+    A3 -->|"grant + proxy"| G --> EXT
 ```
 
 ## Execution Lanes
@@ -116,7 +121,7 @@ method_constraints:
 ```
 
 Shipped families: `github_rest`, `github_git`, `gcp_cli_read`, `gcp_adc`,
-`kubectl`, `internal_admin_cli`.
+`kubectl`, `slack_api`, `internal_admin_cli`.
 
 ## API Reference
 
@@ -131,10 +136,19 @@ Shipped families: `github_rest`, `github_git`, `gcp_cli_read`, `gcp_adc`,
 | `/v1/execute/http` | POST | Remote broker execution — make an HTTP call on behalf of the agent |
 | `/v1/providers/update-token` | POST | Push a delegated credential token (from host agent) |
 | `/v1/phantom-env` | GET | Return phantom env vars for CLI satisfaction (called by host agent at VM boot) |
+| `/v1/sessions/register` | POST | Register a new session with domain rules |
+| `/v1/sessions/{id}` | GET | Get session registration details |
+| `/v1/sessions/{id}` | DELETE | Deregister a session |
+| `/v1/sessions/{id}/policy` | POST/GET/DELETE | Session policy management |
+| `/v1/credentials/gcs` | GET | Resolve a short-lived GCS access token |
+| `/v1/ca.pem` | GET | CONNECT proxy CA certificate (PEM) |
+| `/v1/families` | GET/POST | List or create tool families |
+| `/v1/families/{name}` | GET/DELETE | Get or delete a tool family |
 | `/v1/events/runner` | POST | Runner lifecycle events (not yet implemented) |
 
-All endpoints except `/healthz` and `/v1/providers/update-token` require an
-HMAC-signed attestation token in the `Authorization: Bearer <token>` header.
+All endpoints except `/healthz`, `/v1/providers/update-token`, and `/v1/ca.pem`
+require an HMAC-signed attestation token in the `Authorization: Bearer <token>`
+header.
 
 ## Project Structure
 
@@ -143,17 +157,20 @@ accessplane/          Domain types — requests, responses, lanes, decisions
 audit/                Structured audit logging
 bundle/               Projection bundles for grant lifecycle
 cmd/gentoken/         CLI tool to generate signed attestation tokens (for dev/test)
+deploy/               Terraform IaC for Kubernetes deployment
 dev/                  Docker Compose, env template, smoke test script
 examples/             Usage examples (basic setup, CONNECT proxy, delegated tokens, etc.)
 grants/               Grant lifecycle service
+icap/                 ICAP REQMOD server for Squid proxy integration
 identity/             HMAC attestation token signing and verification
 manifest/             Tool family manifests, registry, validation, SSRF protection
   families/           YAML manifest definitions (embedded at build time)
 policy/               Policy engine — manifest-based allow/deny + lane selection
-providers/            Credential provider framework (static, delegated, registry, config loader)
+providers/            Credential provider framework (static, delegated, gcp-sa, oauth-jwt-bearer)
 proxy/                HTTPS CONNECT proxy with selective SSL bump
 runtime/              Runtime adapters (direct HTTP forward proxy)
-server/               HTTP handlers (resolve, grants, execute, token update)
+server/               HTTP handlers (resolve, grants, execute, sessions, token update)
+session/              Session policy isolation — per-session family scoping
 store/                SQLite persistence
 ```
 
@@ -182,6 +199,16 @@ export PROXY_ADDR=":3128"
 go run .
 ```
 
+### Run with Squid + ICAP integration
+
+```bash
+export ATTESTATION_SECRET=local-dev-secret
+export PROVIDERS_CONFIG=./examples/multi-provider/providers.json
+export ICAP_ADDR=":1344"
+go run .
+# Configure Squid with icap_service pointing to localhost:1344
+```
+
 ### Run with provider config
 
 ```bash
@@ -203,12 +230,15 @@ make lint        # just linting
 
 | Environment Variable | Required | Default | Description |
 |---------------------|----------|---------|-------------|
-| `ATTESTATION_SECRET` | Yes | — | Shared HMAC secret for runner attestation tokens |
+| `ATTESTATION_SECRET` | Yes | — | Shared HMAC secret for runner attestation tokens (minimum 32 bytes) |
 | `LISTEN_ADDR` | No | `:8080` | HTTP API listen address |
 | `DATABASE_URL` | No | `capsule-access.db` | SQLite database path |
 | `CREDENTIAL_REF` | No | `env:GITHUB_TOKEN` | Default credential reference (`env:`, `literal:`, `stored:`) |
 | `PROVIDERS_CONFIG` | No | — | Path to JSON file with `[]ProviderConfig` for named providers |
 | `PROXY_ADDR` | No | — | CONNECT proxy listen address (e.g. `:3128`). Empty = no proxy. |
+| `PROXY_MODE` | No | `connect` | Proxy mode: `connect` (Go CONNECT proxy) or `icap` (Squid + ICAP) |
+| `ICAP_ADDR` | No | — | ICAP REQMOD server listen address (e.g. `:1344`). Used with Squid integration. |
+| `TENANT_ID` | No | — | Tenant identifier for multi-tenant scoping. When set, attestation tokens must include a matching `tenant_id` claim. |
 
 ## What's Missing
 
