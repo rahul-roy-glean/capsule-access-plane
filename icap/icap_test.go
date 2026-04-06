@@ -136,7 +136,6 @@ func startTestServer(t *testing.T, s *Server) string {
 	return ln.Addr().String()
 }
 
-
 // --- Parser tests ---
 
 func TestParseRequest_OPTIONS(t *testing.T) {
