@@ -14,6 +14,11 @@ type Claims struct {
 	ExpiresAt     time.Time `json:"expires_at"`
 	NotBefore     time.Time `json:"not_before,omitempty"`
 
+	// TenantID identifies the tenant this runner belongs to.
+	// Each access plane instance is scoped to a single tenant and validates
+	// that the token's TenantID matches the instance's configured tenant.
+	TenantID string `json:"tenant_id,omitempty"`
+
 	// IdentityMode indicates how the agent's identity is resolved:
 	//   "user-direct" (default) — agent acts on behalf of the requesting user.
 	//   "virtual" — agent has its own persistent identity.

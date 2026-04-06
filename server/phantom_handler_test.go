@@ -71,7 +71,6 @@ func TestGetPhantomEnv_FamilyWithNoPhantom(t *testing.T) {
 
 	handler := NewPhantomHandlers(reg)
 
-	// github_rest has no phantom_env.
 	req := httptest.NewRequest("GET", "/v1/phantom-env?families=github_rest", nil)
 	rr := httptest.NewRecorder()
 	handler.GetPhantomEnv(rr, req)
@@ -83,7 +82,10 @@ func TestGetPhantomEnv_FamilyWithNoPhantom(t *testing.T) {
 	var result map[string]string
 	_ = json.NewDecoder(rr.Body).Decode(&result)
 
-	if len(result) != 0 {
-		t.Errorf("expected empty result for github_rest, got %v", result)
+	if result["GH_TOKEN"] != "phantom" {
+		t.Errorf("GH_TOKEN = %q, want phantom", result["GH_TOKEN"])
+	}
+	if result["GITHUB_TOKEN"] != "phantom" {
+		t.Errorf("GITHUB_TOKEN = %q, want phantom", result["GITHUB_TOKEN"])
 	}
 }

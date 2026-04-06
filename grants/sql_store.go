@@ -123,4 +123,3 @@ func (s *SQLStore) UpdateGrantExpiry(ctx context.Context, id string, expiresAt t
 	}
 	return nil
 }
-

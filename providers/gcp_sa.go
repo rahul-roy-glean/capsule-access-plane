@@ -9,6 +9,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
 
 // GCPServiceAccountProvider mints short-lived access tokens by impersonating
@@ -52,7 +55,15 @@ func (p *GCPServiceAccountProvider) Matches(host string) bool {
 	if len(p.hosts) == 0 {
 		return true
 	}
-	return p.hosts[host]
+	for h := range p.hosts {
+		if h == host {
+			return true
+		}
+		if strings.HasPrefix(h, "*.") && strings.HasSuffix(host, h[1:]) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *GCPServiceAccountProvider) InjectCredentials(req *http.Request) error {
@@ -78,7 +89,18 @@ func (p *GCPServiceAccountProvider) ResolveToken(_ context.Context) (string, err
 }
 
 // Start performs the initial token fetch and starts the background refresh loop.
+// Uses Google Application Default Credentials (ADC) to authenticate IAM API calls.
 func (p *GCPServiceAccountProvider) Start(ctx context.Context) error {
+	// Create an authenticated HTTP client using ADC (Workload Identity on GKE,
+	// service account key file, or gcloud credentials locally).
+	if p.HTTPClient == nil {
+		ts, err := google.DefaultTokenSource(ctx, "https://www.googleapis.com/auth/iam")
+		if err != nil {
+			return fmt.Errorf("gcp-sa: failed to get default credentials: %w", err)
+		}
+		p.HTTPClient = oauth2.NewClient(ctx, ts)
+	}
+
 	if err := p.refresh(ctx); err != nil {
 		return fmt.Errorf("gcp-sa: initial token fetch: %w", err)
 	}

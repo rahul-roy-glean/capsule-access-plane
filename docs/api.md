@@ -220,19 +220,23 @@ and returns the response.
 
 ## POST /v1/providers/update-token
 
-Push a delegated credential token. Called by the host agent, not by VM agents.
+Push a delegated credential token. Called by the external service (not by VM agents).
 No attestation token required (intended for host-local communication).
+
+Tokens can be scoped per-session using `session_id` (preferred), per-source using
+`source_ip` (deprecated), or global (no scope key). The proxy resolves tokens in
+order: session_id > source_ip > global.
 
 **Request:**
 
 ```json
 {
   "provider": "github",
+  "session_id": "818233b1-72e0-481c-a1f3-5a3d33f52e7b",
   "token": "ghs_installation_token_here",
   "expires_at": "2026-03-20T11:00:00Z",
-  "source_ip": "172.16.0.2",
   "identity": {
-    "user_email": "alice@glean.com",
+    "user_email": "name@company.com",
     "headers": {
       "X-Glean-Agent-Session": "sess-123"
     }
@@ -240,10 +244,14 @@ No attestation token required (intended for host-local communication).
 }
 ```
 
-- `source_ip` (optional): Scopes the token to a specific VM source IP. If
-  omitted, the token is set as the global fallback.
-- `identity` (optional): Identity headers injected into proxied requests.
-  `user_email` sets `X-Glean-User-Email`. `headers` sets arbitrary headers.
+| Field | Required | Description |
+|-------|----------|-------------|
+| `provider` | Yes | Provider name (must be a `delegated` type) |
+| `token` | Yes | Credential token to inject |
+| `session_id` | No | Scope token to a specific session. The CONNECT proxy extracts `session_id` from the attestation token in `Proxy-Authorization` to match. |
+| `source_ip` | No | Deprecated. Scope by source IP. Prefer `session_id`. |
+| `expires_at` | No | Token expiry (tokens rejected after this time) |
+| `identity` | No | Identity headers injected into proxied requests |
 
 **Multi-credential push** (different tokens for different operations on the same domain):
 
@@ -283,7 +291,7 @@ No attestation token required (intended for host-local communication).
 ## GET /v1/phantom-env
 
 Returns phantom environment variables needed for CLI tools to bypass local
-credential checks. Called by the host agent at VM boot time to know which
+credential checks. Called by the thaw agent at VM boot time to know which
 env vars to inject into the VM.
 
 **Request:**
@@ -294,7 +302,20 @@ curl http://localhost:8080/v1/phantom-env
 
 # Specific families:
 curl http://localhost:8080/v1/phantom-env?families=gcp_cli_read,kubectl
+
+# Session-scoped (only families in the session's policy):
+curl http://localhost:8080/v1/phantom-env?session_id=sess-123
 ```
+
+**Query params:**
+
+| Param | Description |
+|---|---|
+| `families` | Comma-separated family names to filter by |
+| `session_id` | Scope to the session's allowed families (from session policy) |
+
+If `session_id` is provided and the session has a policy, only families in
+that policy are included. If the session has no policy, returns empty `{}`.
 
 **Response (200):**
 
@@ -312,6 +333,156 @@ proxy replaces them with real credentials at the network boundary.
 ## POST /v1/events/runner
 
 Runner lifecycle event ingestion. **Not yet implemented** — returns 501.
+
+## Family Management
+
+Dynamic family CRUD for managing API manifests at runtime. YAML-loaded families
+are read-only base families; API-created families can be created, updated, and deleted.
+
+### GET /v1/families
+
+List all available families (base YAML + dynamic API-created).
+
+**Response (200):**
+
+```json
+{
+  "families": [
+    {"name": "github_rest", "source": "yaml"},
+    {"name": "gcp_cli_read", "source": "yaml"},
+    {"name": "custom_api", "source": "api"}
+  ]
+}
+```
+
+### GET /v1/families/{name}
+
+Get a single family definition (full manifest JSON).
+
+**Response (200):**
+
+```json
+{
+  "family": "github_rest",
+  "source": "yaml",
+  "destinations": [{"host": "api.github.com", "port": 443}],
+  "provider": {"type": "delegated", "name": "github"}
+}
+```
+
+**Error codes:** 404 (unknown family)
+
+### POST /v1/families
+
+Create or update a dynamic family. Validates the manifest before storing.
+Cannot override YAML-defined base families.
+
+**Request:**
+
+```json
+{
+  "family": "custom_api",
+  "destinations": [{"host": "api.custom.com", "port": 443}],
+  "provider": {"type": "delegated", "name": "custom"}
+}
+```
+
+**Response (201):** `{"family": "custom_api", "status": "created"}`
+
+**Error codes:** 400 (invalid manifest), 409 (conflicts with YAML base family)
+
+### DELETE /v1/families/{name}
+
+Remove an API-created family. Cannot delete YAML-defined base families.
+
+**Response (204):** No content
+
+**Error codes:** 404 (unknown family), 409 (YAML base family, cannot delete)
+
+## Session Policy
+
+Per-session policy endpoints. The control plane pushes a session's allowed
+families and credentials after runner allocation. Sessions without a policy
+are denied all access.
+
+### POST /v1/sessions/{id}/policy
+
+Set a session's allowed families and credentials. Called by the control plane
+after allocating or resuming a runner.
+
+**Request:**
+
+```json
+{
+  "families": {
+    "github_rest": {"token": "ghs_xxxxxxxxxxxx"},
+    "gcp_cli_read": {"credential_ref": "sm:my-project/gcp-sa-key"},
+    "slack_api": {}
+  }
+}
+```
+
+Each family key must exist in the registry (base or dynamic). Per-family value:
+
+| Shape | Meaning |
+|---|---|
+| `{"token": "..."}` | Delegated — use this token for credential injection |
+| `{"credential_ref": "sm:..."}` | Managed — access plane resolves the secret ref |
+| `{}` | Auto-minting — access plane provider generates tokens (e.g. GCP SA) |
+
+**Response (200):**
+
+```json
+{
+  "status": "ok",
+  "session_id": "sess-123"
+}
+```
+
+**Error codes:** 400 (unknown family name, missing required token for delegated provider)
+
+### GET /v1/sessions/{id}/policy
+
+Get a session's current policy.
+
+**Response (200):**
+
+```json
+{
+  "session_id": "sess-123",
+  "families": ["github_rest", "gcp_cli_read", "slack_api"],
+  "created_at": "2026-04-02T10:00:00Z"
+}
+```
+
+**Error codes:** 404 (no policy set for session)
+
+### DELETE /v1/sessions/{id}/policy
+
+Revoke a session's policy. The session immediately loses access to all families.
+Any active grants or provider tokens scoped to this session are revoked.
+
+**Response (200):**
+
+```json
+{
+  "status": "revoked",
+  "session_id": "sess-123"
+}
+```
+
+## GET /v1/ca.pem
+
+Get the CONNECT proxy's CA certificate in PEM format. VMs fetch this at boot
+to install in their trust store so SSL bump (MITM) connections are trusted.
+
+No auth required. Returns `503 Service Unavailable` if the CONNECT proxy is not enabled.
+
+**Response (200):** PEM-encoded certificate (`Content-Type: application/x-pem-file`)
+
+Note: the CA is generated in-memory on each access plane startup. If the pod
+restarts, a new CA is generated and running VMs will need a fresh allocation
+to pick up the new certificate.
 
 ## Using the Local Proxy (Direct HTTP Lane)
 
@@ -333,16 +504,27 @@ The proxy:
 
 ## Using the CONNECT Proxy
 
-Set `HTTPS_PROXY` in the VM and make standard HTTPS requests:
+Set `HTTPS_PROXY` in the VM and make standard HTTPS requests. The thaw agent
+embeds the attestation token in the proxy URL for session identification:
 
 ```bash
-export HTTPS_PROXY=http://172.16.0.1:3128
+# Thaw agent sets this automatically (token embedded for session scoping):
+export HTTPS_PROXY=http://bearer:ATTESTATION_TOKEN@172.16.0.1:3128
+
+# All HTTPS requests route through the proxy:
 curl https://api.github.com/repos/org/repo
+gh repo list
 ```
 
 The proxy:
+- extracts `session_id` from the `Proxy-Authorization` header (decoded from URL credentials)
 - validates the CONNECT target host against all manifest destinations
 - checks SSRF
-- if a credential provider matches the host: SSL bump (MITM), inject credentials, enforce method+path
+- if a credential provider matches the host: SSL bump (MITM), inject session-scoped credentials, enforce method+path
 - if no provider: raw tunnel (no inspection, no credential injection)
+
+Token resolution order for credential injection:
+1. Per-session token (matched by `session_id` from attestation token)
+2. Per-source IP token (legacy, deprecated)
+3. Global fallback token
 - rejects hosts not in any manifest with 403
