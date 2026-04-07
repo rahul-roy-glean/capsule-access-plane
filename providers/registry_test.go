@@ -8,15 +8,19 @@ import (
 
 // fakeProvider is a minimal CredentialProvider for testing.
 type fakeProvider struct {
-	name  string
-	typ   string
-	hosts []string
-	token string
+	name     string
+	typ      string
+	hosts    []string
+	token    string
+	matchAll bool
 }
 
 func (p *fakeProvider) Name() string { return p.name }
 func (p *fakeProvider) Type() string { return p.typ }
 func (p *fakeProvider) Matches(host string) bool {
+	if p.matchAll {
+		return true
+	}
 	for _, h := range p.hosts {
 		if h == host {
 			return true
@@ -122,6 +126,40 @@ func TestRegistry_ForHost(t *testing.T) {
 	_, ok = reg.ForHost("evil.example.com")
 	if ok {
 		t.Error("expected no match for evil.example.com")
+	}
+}
+
+func TestRegistry_ForHost_PrefersNamedOverDefault(t *testing.T) {
+	reg := NewRegistry()
+
+	// Default provider matches all hosts (no hosts restriction).
+	catchAll := &fakeProvider{name: "default", typ: "static", hosts: nil}
+	catchAll.matchAll = true
+	reg.SetDefault(catchAll)
+	_ = reg.Register(catchAll)
+
+	// Named provider matches specific host.
+	named := &fakeProvider{name: "glean-mcp", typ: "oauth", hosts: []string{"mcp.example.com"}}
+	_ = reg.Register(named)
+
+	// Run many times to defeat map iteration order.
+	for i := 0; i < 100; i++ {
+		got, ok := reg.ForHost("mcp.example.com")
+		if !ok {
+			t.Fatal("expected match")
+		}
+		if got.Name() != "glean-mcp" {
+			t.Fatalf("iteration %d: got provider %q, want glean-mcp (named should beat default)", i, got.Name())
+		}
+	}
+
+	// Host that only matches default should still return default.
+	got, ok := reg.ForHost("other.example.com")
+	if !ok {
+		t.Fatal("expected default to match other.example.com")
+	}
+	if got.Name() != "default" {
+		t.Errorf("got %q, want default for unmatched host", got.Name())
 	}
 }
 

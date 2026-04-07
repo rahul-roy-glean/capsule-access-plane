@@ -69,14 +69,24 @@ func (r *Registry) ForManifest(providerName string) (CredentialProvider, error) 
 	return nil, fmt.Errorf("providers: no default provider configured")
 }
 
-// ForHost returns the first provider that matches the given host.
+// ForHost returns the best provider that matches the given host.
+// Named providers take priority over the default catch-all provider.
 func (r *Registry) ForHost(host string) (CredentialProvider, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	var fallback CredentialProvider
 	for _, p := range r.providers {
-		if p.Matches(host) {
-			return p, true
+		if !p.Matches(host) {
+			continue
 		}
+		if p == r.def {
+			fallback = p
+			continue
+		}
+		return p, true
+	}
+	if fallback != nil {
+		return fallback, true
 	}
 	return nil, false
 }
