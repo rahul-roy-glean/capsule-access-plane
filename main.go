@@ -183,6 +183,12 @@ func main() {
 	mux.HandleFunc("GET /v1/sessions/{session_id}/policy", sessionHandlers.GetPolicy)
 	mux.HandleFunc("DELETE /v1/sessions/{session_id}/policy", sessionHandlers.DeletePolicy)
 
+	// Credential management endpoints
+	credentialHandlers := server.NewCredentialHandlers(verifier, dataStore.DB(), logger)
+	mux.HandleFunc("POST /v1/credentials", credentialHandlers.UpsertCredential)
+	mux.HandleFunc("GET /v1/credentials", credentialHandlers.ListCredentials)
+	mux.HandleFunc("DELETE /v1/credentials/{id}", credentialHandlers.DeleteCredential)
+
 	// CA cert endpoint — serves the CONNECT proxy's CA cert in PEM format.
 	// VMs fetch this to install in their trust store for SSL bump.
 	// Populated after the proxy starts (nil until then).

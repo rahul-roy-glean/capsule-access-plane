@@ -59,8 +59,17 @@ method_constraints:
     path_pattern: "/orgs/**"
   - method: GET
     path_pattern: "/installation/repositories"
-  # Git operations
+  # Git operations (API)
   - method: GET
     path_pattern: "/repos/*/git/**"
   - method: POST
     path_pattern: "/repos/*/git/**"
+  # Git smart HTTP (clone/fetch/push over HTTPS)
+  - method: GET
+    path_pattern: "/*/*.git/info/refs"
+  - method: GET
+    path_pattern: "/*/*.git/HEAD"
+  - method: POST
+    path_pattern: "/*/*.git/git-upload-pack"
+  - method: POST
+    path_pattern: "/*/*.git/git-receive-pack"
