@@ -25,7 +25,7 @@ import (
 	"github.com/rahul-roy-glean/capsule-access-plane/store"
 )
 
-const testSecret = "e2e-test-secret"
+const testSecret = "e2e-test-secret-must-be-32bytes!"
 
 // e2eServer sets up a complete server stack with in-memory SQLite, returning
 // the base URL, a signed-token helper, and a cleanup function.

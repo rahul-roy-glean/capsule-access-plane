@@ -18,141 +18,153 @@ goal is:
 
 ## System Context
 
-```text
-┌───────────────────────────────────────────────────────────────────────┐
-│ Capsule Host Agent                                                   │
-│   - starts access plane subprocess                                   │
-│   - pushes delegated tokens via /v1/providers/update-token           │
-│   - passes provider config file (PROVIDERS_CONFIG)                   │
-└───────────────────────────────────────────────────────────────────────┘
-        │ attestation token, provider tokens
-        ▼
-┌───────────────────────────────────────────────────────────────────────┐
-│ Agent (inside Capsule microVM)                                       │
-│   - holds attestation token                                          │
-│   - uses HTTPS_PROXY for transparent credential injection            │
-│   - calls access plane API for remote execution / grants             │
-│   - never holds raw credentials                                      │
-└───────────────────────────────────────────────────────────────────────┘
-        │ CONNECT / resolve / grant / execute
-        ▼
-┌───────────────────────────────────────────────────────────────────────┐
-│ Capsule Access Plane                                                 │
-│ ┌─────────────┐ ┌────────────┐ ┌─────────────┐ ┌──────────────────┐ │
-│ │  Identity   │ │  Manifest  │ │   Policy    │ │    Provider      │ │
-│ │  Verifier   │ │  Registry  │ │   Engine    │ │    Registry      │ │
-│ └─────────────┘ └────────────┘ └─────────────┘ └──────────────────┘ │
-│                                                                      │
-│ ┌───────────────────────────────────────────────────────────────────┐ │
-│ │ HTTP Handlers                                                     │ │
-│ │  ResolveHandler │ GrantHandlers │ ExecuteHandler │ TokenHandlers │ │
-│ └───────────────────────────────────────────────────────────────────┘ │
-│                                                                      │
-│ ┌─────────────────────┐ ┌─────────────────────┐ ┌────────────────┐ │
-│ │ CONNECT Proxy       │ │ Direct HTTP Adapter │ │ Audit Logger   │ │
-│ │ (SSL bump + tunnel) │ │ (per-grant proxies) │ │ (structured    │ │
-│ │                     │ │                     │ │  slog output)  │ │
-│ └─────────────────────┘ └─────────────────────┘ └────────────────┘ │
-│                                                                      │
-│ ┌──────────────────────┐ ┌────────────────────┐                     │
-│ │ SSRF Protection      │ │  SQLite DB         │                     │
-│ │ (DNS + IP validation)│ │  grants, creds     │                     │
-│ └──────────────────────┘ └────────────────────┘                     │
-└───────────────────────────────────────────────────────────────────────┘
-        │ outbound HTTP/HTTPS (with credential)
-        ▼
-┌───────────────────────────────────────────────────────────────────────┐
-│ External Services                                                    │
-│   api.github.com  │  *.googleapis.com  │  k8s clusters  │  ...     │
-└───────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph HOST["Capsule Host Agent"]
+        HA["Starts access plane subprocess<br/>Pushes delegated tokens via /v1/providers/update-token<br/>Passes provider config file (PROVIDERS_CONFIG)"]
+    end
+
+    subgraph VM["Agent (inside Capsule microVM)"]
+        AG["Holds attestation token<br/>Uses HTTPS_PROXY for transparent credential injection<br/>Calls access plane API for remote execution / grants<br/><b>Never holds raw credentials</b>"]
+    end
+
+    subgraph AP["Capsule Access Plane"]
+        direction TB
+        subgraph CORE["Core Services"]
+            IV["Identity<br/>Verifier"]
+            MR["Manifest<br/>Registry"]
+            PE["Policy<br/>Engine"]
+            PR["Provider<br/>Registry"]
+        end
+        subgraph HANDLERS["HTTP Handlers"]
+            RH["ResolveHandler"]
+            GH["GrantHandlers"]
+            EH["ExecuteHandler"]
+            TH["TokenHandlers"]
+            SH["SessionHandlers"]
+        end
+        subgraph TRANSPORT["Transport Layer"]
+            CP["CONNECT Proxy<br/>(SSL bump + tunnel)"]
+            ICAP["ICAP Server<br/>(Squid integration)"]
+            DHA["Direct HTTP Adapter<br/>(per-grant proxies)"]
+        end
+        subgraph INFRA["Infrastructure"]
+            SSRF["SSRF Protection<br/>(DNS + IP + PinnedDialer)"]
+            AL["Audit Logger"]
+            DB["SQLite DB"]
+        end
+    end
+
+    subgraph EXT["External Services"]
+        GIT["api.github.com"]
+        GCP["*.googleapis.com"]
+        K8S["k8s clusters"]
+        OTHER["..."]
+    end
+
+    HA -->|"attestation token, provider tokens"| AG
+    AG -->|"CONNECT / resolve / grant / execute"| AP
+    AP -->|"outbound HTTP/HTTPS (with credential)"| EXT
 ```
 
 ## Request Lifecycle
 
 Every access-plane interaction follows the same pattern:
 
-```text
-1. Authenticate   ──  verify HMAC attestation token, extract runner_id + session_id
-2. Authorize      ──  decode request, validate runner context matches token claims
-3. Validate       ──  look up tool family manifest, check host + method + path
-4. SSRF check     ──  resolve DNS, reject private/loopback/link-local IPs
-5. Policy         ──  evaluate policy engine (allow/deny, lane selection, approval)
-6. Credential     ──  resolve credential via provider registry (static, delegated, or named)
-7. Act            ──  make outbound call, start proxy, or MITM connection
-8. Audit          ──  structured log with correlation ID, duration, outcome
-9. Respond        ──  return result to agent
+```mermaid
+flowchart TD
+    A["1. Authenticate<br/>Verify HMAC attestation token,<br/>extract runner_id + session_id"] --> B["2. Authorize<br/>Decode request, validate runner<br/>context matches token claims"]
+    B --> C["3. Validate<br/>Look up tool family manifest,<br/>check host + method + path"]
+    C --> D["4. SSRF Check<br/>Resolve DNS, reject private/<br/>loopback/link-local IPs"]
+    D --> E["5. Policy<br/>Evaluate policy engine<br/>(allow/deny, lane selection, approval)"]
+    E --> F["6. Credential<br/>Resolve credential via provider registry<br/>(static, delegated, gcp-sa, oauth)"]
+    F --> G["7. Act<br/>Make outbound call, start proxy,<br/>or MITM connection"]
+    G --> H["8. Audit<br/>Structured log with correlation ID,<br/>duration, outcome"]
+    H --> I["9. Respond<br/>Return result to agent"]
 ```
 
 ### CONNECT Proxy Flow (SSL Bump)
 
-```text
-VM ──► CONNECT api.github.com:443 ──► Access Plane Proxy
-        │
-        ├─ validate host against all manifest destinations
-        ├─ SSRF check (DNS resolve, reject private IPs)
-        ├─ 200 Connection Established
-        │
-        ├─ credential provider exists for host?
-        │   YES → SSL bump:
-        │     ├─ TLS handshake with client (CA-signed leaf cert)
-        │     ├─ read HTTP request from decrypted stream
-        │     ├─ validate method + path against manifest constraints
-        │     ├─ inject credentials via provider.InjectCredentials()
-        │     ├─ forward to real target over TLS
-        │     └─ relay response back to client
-        │
-        │   NO → raw tunnel:
-        │     └─ bidirectional byte copy (no inspection)
-        │
-        └─ audit log
+```mermaid
+sequenceDiagram
+    participant VM as VM Agent
+    participant AP as Access Plane Proxy
+    participant EXT as External API
+
+    VM->>AP: CONNECT api.github.com:443
+    AP->>AP: Validate host against manifest destinations
+    AP->>AP: SSRF check (DNS resolve via PinnedDialer, reject private IPs)
+    AP-->>VM: 200 Connection Established
+
+    alt Credential provider exists for host
+        Note over VM,AP: SSL Bump (MITM)
+        AP->>VM: TLS handshake (CA-signed leaf cert)
+        VM->>AP: HTTP request (decrypted)
+        AP->>AP: Validate method + path against manifest
+        AP->>AP: Inject credentials via provider.InjectCredentials()
+        AP->>EXT: Forward request over TLS
+        EXT-->>AP: Response
+        AP-->>VM: Relay response
+    else No credential provider
+        Note over VM,EXT: Raw Tunnel
+        VM->>EXT: Bidirectional byte copy (no inspection)
+    end
+    AP->>AP: Audit log
 ```
 
 ### Execute Flow (Remote Execution Lane)
 
-```text
-Agent ──► POST /v1/execute/http
-           { tool_family, method, url, headers, body }
-           │
-           ├─ verify attestation token
-           ├─ validate runner context
-           ├─ look up manifest → validate host + method + path
-           ├─ SSRF check (DNS resolve, reject private IPs)
-           ├─ evaluate policy
-           ├─ resolve credential via provider registry
-           ├─ make outbound HTTP call with injected credential
-           ├─ read response (capped at 10 MB)
-           ├─ audit log with correlation ID + duration
-           │
-           └─► { status_code: 200, headers: {...}, body: "...",
-                audit_correlation_id: "exec-s1-t1-1710801234567" }
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant AP as Access Plane
+    participant EXT as External API
+
+    Agent->>AP: POST /v1/execute/http<br/>{tool_family, method, url, headers, body}
+    AP->>AP: Verify attestation token
+    AP->>AP: Validate runner context
+    AP->>AP: Look up manifest → validate host + method + path
+    AP->>AP: SSRF check (DNS resolve, reject private IPs)
+    AP->>AP: Evaluate policy
+    AP->>AP: Resolve credential via provider registry
+    AP->>EXT: Outbound HTTP call with injected credential
+    EXT-->>AP: Response
+    AP->>AP: Read response (capped at 10 MB)
+    AP->>AP: Audit log with correlation ID + duration
+    AP-->>Agent: {status_code, headers, body, audit_correlation_id}
 ```
 
 ### Grant + Proxy Flow (Direct HTTP Lane)
 
-```text
-Agent ──► POST /v1/grants/project (tool_family, lane, scope)
-           │
-           ├─ resolve credential via provider registry
-           ├─ create grant record in SQLite
-           ├─ start localhost forward proxy on random port
-           ├─ audit log
-           │
-           └─► { grant_id: "...", projection_ref: "127.0.0.1:54321" }
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant AP as Access Plane
+    participant Proxy as Forward Proxy<br/>(localhost:54321)
+    participant EXT as External API
 
-Agent ──► GET http://127.0.0.1:54321/path
-           Headers: X-Target-URL: https://api.github.com/repos/foo/bar
-           │
-           ├─ validate target host against manifest destinations
-           ├─ SSRF check
-           ├─ validate method + path against manifest constraints
-           ├─ strip hop-by-hop headers
-           ├─ inject Authorization: Bearer <credential>
-           ├─ forward to target
-           │
-           └─► proxied response from api.github.com
+    Note over Agent,AP: Step 1: Create Grant
+    Agent->>AP: POST /v1/grants/project<br/>{tool_family, lane, scope}
+    AP->>AP: Resolve credential via provider registry
+    AP->>AP: Create grant record in SQLite
+    AP->>Proxy: Start localhost forward proxy on random port
+    AP->>AP: Audit log
+    AP-->>Agent: {grant_id, projection_ref: "127.0.0.1:54321"}
 
-Agent ──► POST /v1/grants/revoke
-           └─ stop proxy, revoke grant, audit log
+    Note over Agent,EXT: Step 2: Use Proxy
+    Agent->>Proxy: GET http://127.0.0.1:54321/path<br/>X-Target-URL: https://api.github.com/repos/foo/bar
+    Proxy->>Proxy: Validate target host against manifest
+    Proxy->>Proxy: SSRF check
+    Proxy->>Proxy: Validate method + path against manifest
+    Proxy->>Proxy: Strip hop-by-hop headers
+    Proxy->>Proxy: Inject Authorization: Bearer credential
+    Proxy->>EXT: Forward to target
+    EXT-->>Proxy: Response
+    Proxy-->>Agent: Proxied response
+
+    Note over Agent,AP: Step 3: Revoke
+    Agent->>AP: POST /v1/grants/revoke
+    AP->>AP: Stop proxy, revoke grant, audit log
 ```
 
 ## Component Model
@@ -171,6 +183,13 @@ expiry. Tokens also carry optional identity fields:
 `Claims.EffectiveIdentity()` resolves the right identity string for audit
 and policy purposes.
 
+**Tenant scoping:** When `TENANT_ID` is set, the verifier validates that the
+token's `tenant_id` claim matches. This ensures tokens issued for one tenant
+cannot be used against another tenant's access plane in multi-tenant deployments.
+
+**Minimum secret size:** The HMAC secret must be at least 32 bytes to prevent
+brute-force attacks on short secrets.
+
 Token format: `base64(json_payload).base64(hmac_signature)`
 
 ### Manifest Registry (`manifest/`)
@@ -185,15 +204,31 @@ Manifests declare:
 - **logical_actions** — named operations with risk classifications
 - **provider** — named credential provider for this family
 
-### SSRF Protection (`manifest/ssrf.go`)
+### SSRF Protection (`manifest/ssrf.go`, `manifest/dialer.go`)
 
-Every outbound connection (execute handler, direct HTTP proxy, CONNECT proxy)
-passes through `CheckSSRF`:
+Every outbound connection (execute handler, direct HTTP proxy, CONNECT proxy,
+ICAP handler) passes through `CheckSSRF`:
 
 1. If the host is an IP literal, validate directly (no DNS)
 2. Otherwise, resolve via DNS
 3. If `AllowedIPs` is set on the destination, resolved IPs must fall within those CIDRs
 4. Otherwise, reject private IPs (RFC 1918, loopback, link-local including 169.254.169.254)
+
+**DNS rebinding protection:** `CheckSSRF` returns the resolved IP addresses,
+which are then passed to `PinnedDialer`. The `PinnedDialer` creates a
+`DialContext` function that connects directly to the pre-resolved IPs instead
+of performing DNS resolution again. This prevents TOCTOU (time-of-check-to-time-of-use)
+attacks where a DNS response changes between the SSRF check and the actual
+connection.
+
+```mermaid
+flowchart LR
+    A["Host: api.example.com"] --> B["CheckSSRF<br/>DNS resolve → 93.184.216.34"]
+    B -->|"resolved IPs"| C["PinnedDialer<br/>connects to 93.184.216.34 directly"]
+    C --> D["Outbound Connection<br/>(no second DNS lookup)"]
+    
+    B -->|"private IP detected"| E["BLOCKED<br/>SSRF denied"]
+```
 
 ### Policy Engine (`policy/`)
 
@@ -224,6 +259,9 @@ Built-in provider types:
 - **gcp-sa** — mints short-lived GCP access tokens by impersonating a service
   account via the IAM Credentials API (`generateAccessToken`). Background
   refresh loop keeps the token fresh (refreshes at 75% of lifetime).
+- **oauth-jwt-bearer** — exchanges a GCP identity token for an OAuth access
+  token via a configured token endpoint. Used for third-party services that
+  accept federated OAuth tokens.
 
 The registry supports:
 - Named lookup (`Get`, `ForManifest`) for manifest-driven credential selection
@@ -242,6 +280,51 @@ An HTTPS CONNECT proxy with selective SSL bump:
 - **Credential injection** — `provider.InjectCredentials(req)` on every MITM'd request
 - **Full validation** — host, SSRF, method+path enforcement on every connection
 - **Audit logging** — every CONNECT logged with result and duration
+
+### ICAP Server (`icap/`)
+
+An ICAP/1.0 REQMOD server for integration with Squid (or any ICAP-capable proxy).
+This is an alternative to the built-in CONNECT proxy for deployments that already
+use Squid as their HTTP proxy.
+
+```mermaid
+sequenceDiagram
+    participant VM as VM Agent
+    participant Squid
+    participant ICAP as ICAP Server
+    participant EXT as External API
+
+    VM->>Squid: HTTP request
+    Squid->>ICAP: REQMOD (encapsulated HTTP request)
+    ICAP->>ICAP: Validate host against manifests
+    ICAP->>ICAP: SSRF check
+    ICAP->>ICAP: Validate method + path constraints
+    alt Credential provider found
+        ICAP->>ICAP: Inject credentials into request
+        ICAP-->>Squid: 200 OK (modified request)
+    else No provider for host
+        ICAP-->>Squid: 204 No Modification
+    end
+    alt Host denied by manifest
+        ICAP-->>Squid: 200 OK (HTTP 403 error response)
+    end
+    Squid->>EXT: Forward (modified) request
+    EXT-->>Squid: Response
+    Squid-->>VM: Response
+```
+
+The ICAP server handles:
+
+- **OPTIONS** — advertises REQMOD capabilities
+- **REQMOD** — intercepts HTTP requests: validates against manifests, performs
+  SSRF checks, enforces method+path constraints, and injects credentials
+- **Session context** — extracts session ID from `X-Proxy-Token` header for
+  per-session credential scoping
+- **Error responses** — returns encapsulated HTTP error responses (403, 405)
+  when requests are denied
+
+Enable with `ICAP_ADDR=:1344`. The ICAP server implements the `ProxyBackend`
+interface alongside the CONNECT proxy.
 
 ### Grant Service (`grants/`)
 
@@ -263,13 +346,15 @@ ID.
 
 | Layer | Mechanism |
 |-------|-----------|
-| Identity | HMAC-SHA256 attestation tokens with user-direct and virtual identity modes |
+| Identity | HMAC-SHA256 attestation tokens with user-direct and virtual identity modes; minimum 32-byte secret |
+| Tenant isolation | Optional `TENANT_ID` scoping — tokens must carry matching `tenant_id` claim |
 | Authorization | Runner context must match token claims |
-| Manifest validation | Destination host + HTTP method + URL path glob allowlist |
-| SSRF protection | DNS resolution + private IP blocking + CIDR allowlists |
+| Manifest validation | Destination host (with wildcard/glob matching) + HTTP method + URL path glob allowlist |
+| SSRF protection | DNS resolution + private IP blocking + CIDR allowlists + PinnedDialer (DNS rebinding prevention) |
 | Policy | Pluggable engine (currently manifest-based, CEL interface ready) |
 | Credential isolation | Credentials resolved server-side via provider registry, per-session scoping |
 | Multi-credential | Request-level credential selection (method+path rules) for same-domain dual-token scenarios |
 | Proxy security | Hop-by-hop header stripping, selective SSL bump, identity header injection |
+| ICAP integration | Squid-delegated request modification with full manifest validation |
 | Audit | Every operation logged with full context + identity mode attribution |
 | Grant scoping | Grants bound to runner_id, time-limited, revocable |

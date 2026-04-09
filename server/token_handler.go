@@ -3,8 +3,10 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/rahul-roy-glean/capsule-access-plane/identity"
 	"github.com/rahul-roy-glean/capsule-access-plane/providers"
 )
 
@@ -27,16 +29,33 @@ type TokenIdentity struct {
 // TokenHandlers serves the provider token management endpoints.
 type TokenHandlers struct {
 	providers *providers.Registry
+	verifier  identity.Verifier
 }
 
 // NewTokenHandlers creates token management handlers.
-func NewTokenHandlers(providerRegistry *providers.Registry) *TokenHandlers {
-	return &TokenHandlers{providers: providerRegistry}
+func NewTokenHandlers(providerRegistry *providers.Registry, verifier identity.Verifier) *TokenHandlers {
+	return &TokenHandlers{providers: providerRegistry, verifier: verifier}
 }
 
 // UpdateToken handles POST /v1/providers/update-token.
 // The host agent pushes delegated tokens here.
 func (h *TokenHandlers) UpdateToken(w http.ResponseWriter, r *http.Request) {
+	// Authenticate
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{
+			"error": "missing or invalid Authorization header",
+		})
+		return
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if _, err := h.verifier.Verify(token); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{
+			"error": "invalid attestation token: " + err.Error(),
+		})
+		return
+	}
+
 	var req TokenUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{

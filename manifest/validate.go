@@ -2,13 +2,49 @@ package manifest
 
 import "strings"
 
-// BuildAllowedHosts returns a set of allowed hostnames from the given destinations.
-func BuildAllowedHosts(destinations []Destination) map[string]bool {
-	hosts := make(map[string]bool, len(destinations))
-	for _, d := range destinations {
-		hosts[d.Host] = true
+// HostMatcher efficiently matches hostnames against a set of destination hosts
+// that may include wildcard patterns (* and **).
+type HostMatcher struct {
+	exact    map[string]bool // lowercased exact hostnames
+	patterns []string        // wildcard patterns (lowercased)
+}
+
+// NewHostMatcher creates a HostMatcher from a list of destinations.
+// Exact hosts go into a map for O(1) lookup; wildcard patterns are stored
+// separately and checked in order.
+func NewHostMatcher(destinations []Destination) *HostMatcher {
+	m := &HostMatcher{
+		exact: make(map[string]bool, len(destinations)),
 	}
-	return hosts
+	for _, d := range destinations {
+		h := strings.ToLower(d.Host)
+		if strings.HasPrefix(h, "*.") || strings.HasPrefix(h, "**.") {
+			m.patterns = append(m.patterns, h)
+		} else {
+			m.exact[h] = true
+		}
+	}
+	return m
+}
+
+// Matches reports whether host matches any destination in this matcher.
+func (m *HostMatcher) Matches(host string) bool {
+	h := strings.ToLower(host)
+	if m.exact[h] {
+		return true
+	}
+	for _, pat := range m.patterns {
+		if matchHostGlob(pat, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// BuildAllowedHosts returns a HostMatcher for the given destinations.
+// This replaces the former map[string]bool return value.
+func BuildAllowedHosts(destinations []Destination) *HostMatcher {
+	return NewHostMatcher(destinations)
 }
 
 // ExtractHost extracts the hostname from a URL string, stripping the port.
@@ -144,26 +180,76 @@ func globMatch(pattern, path []string) bool {
 	return len(path) == 0
 }
 
-// FindDestination returns the Destination matching the given host, or nil.
+// MatchHostGlob matches a hostname against a pattern that supports:
+//   - Exact match: "api.github.com" matches "api.github.com"
+//   - Wildcard prefix: "*.googleapis.com" matches "storage.googleapis.com"
+//     but NOT "googleapis.com" (the * requires exactly one label)
+//     and NOT "a.b.googleapis.com" (single wildcard matches one label only)
+//   - Double wildcard: "**.example.com" matches "a.b.c.example.com",
+//     "x.example.com", and "example.com" (zero or more labels)
+//
+// Matching is case-insensitive (DNS is case-insensitive).
+func MatchHostGlob(pattern, host string) bool {
+	return matchHostGlob(strings.ToLower(pattern), strings.ToLower(host))
+}
+
+// matchHostGlob is the internal implementation; both arguments must already
+// be lowercased.
+func matchHostGlob(pattern, host string) bool {
+	if pattern == host {
+		return true
+	}
+
+	// Double-wildcard: **.suffix matches zero or more labels before suffix.
+	if strings.HasPrefix(pattern, "**.") {
+		suffix := pattern[3:] // e.g. "example.com" from "**.example.com"
+		if host == suffix {
+			return true // zero extra labels
+		}
+		return strings.HasSuffix(host, "."+suffix)
+	}
+
+	// Single-wildcard: *.suffix matches exactly one label before suffix.
+	if strings.HasPrefix(pattern, "*.") {
+		suffix := pattern[2:] // e.g. "googleapis.com" from "*.googleapis.com"
+		if !strings.HasSuffix(host, "."+suffix) {
+			return false
+		}
+		prefix := host[:len(host)-len(suffix)-1] // the part before ".suffix"
+		// The prefix must be a single DNS label (no dots).
+		return len(prefix) > 0 && !strings.Contains(prefix, ".")
+	}
+
+	return false
+}
+
+// MatchesHost checks if a hostname matches any of the given destination hosts,
+// supporting wildcard patterns.
+func MatchesHost(destinations []Destination, host string) bool {
+	h := strings.ToLower(host)
+	for _, d := range destinations {
+		if matchHostGlob(strings.ToLower(d.Host), h) {
+			return true
+		}
+	}
+	return false
+}
+
+// FindDestination returns the first Destination whose host pattern matches the
+// given host, or nil. Supports wildcard patterns (* and **).
 func FindDestination(destinations []Destination, host string) *Destination {
+	h := strings.ToLower(host)
 	for i := range destinations {
-		if MatchHost(destinations[i].Host, host) {
+		if matchHostGlob(strings.ToLower(destinations[i].Host), h) {
 			return &destinations[i]
 		}
 	}
 	return nil
 }
 
-// MatchHost checks if a host matches a pattern. Supports exact match and
-// wildcard suffix matching with "*." prefix (e.g. "*.googleapis.com" matches
-// "storage.googleapis.com" but not "googleapis.com").
+// MatchHost checks if a host matches a pattern. Supports exact match,
+// single wildcard "*." prefix, and double wildcard "**." prefix.
+// This delegates to MatchHostGlob for full glob support.
 func MatchHost(pattern, host string) bool {
-	if pattern == host {
-		return true
-	}
-	if strings.HasPrefix(pattern, "*.") {
-		suffix := pattern[1:] // ".googleapis.com"
-		return strings.HasSuffix(host, suffix)
-	}
-	return false
+	return MatchHostGlob(pattern, host)
 }

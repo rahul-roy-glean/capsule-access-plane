@@ -17,10 +17,10 @@ type HMACVerifier struct {
 }
 
 // NewHMACVerifier creates a verifier with the given shared secret.
-// Returns an error if the secret is empty.
+// Returns an error if the secret is shorter than 32 bytes.
 func NewHMACVerifier(secret []byte) (*HMACVerifier, error) {
-	if len(secret) == 0 {
-		return nil, fmt.Errorf("identity: secret must not be empty")
+	if len(secret) < 32 {
+		return nil, fmt.Errorf("identity: secret must be at least 32 bytes (got %d)", len(secret))
 	}
 	return &HMACVerifier{secret: secret}, nil
 }
@@ -77,9 +77,6 @@ func (v *HMACVerifier) Verify(attestation string) (*Claims, error) {
 	}
 	if claims.SessionID == "" {
 		return nil, fmt.Errorf("identity: missing required field: session_id")
-	}
-	if claims.WorkloadKey == "" {
-		return nil, fmt.Errorf("identity: missing required field: workload_key")
 	}
 
 	if v.tenantID != "" && claims.TenantID != v.tenantID {

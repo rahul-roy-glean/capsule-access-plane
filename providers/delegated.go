@@ -42,7 +42,7 @@ type CredentialRule struct {
 // A global fallback token is used when no source-specific token exists.
 type DelegatedProvider struct {
 	name  string
-	hosts map[string]bool
+	hosts []string
 
 	mu       sync.RWMutex
 	global   *SessionToken            // fallback for non-session-scoped use
@@ -52,13 +52,9 @@ type DelegatedProvider struct {
 // NewDelegatedProvider creates a provider that waits for tokens to be pushed
 // via UpdateToken.
 func NewDelegatedProvider(name string, hosts []string) *DelegatedProvider {
-	hostSet := make(map[string]bool, len(hosts))
-	for _, h := range hosts {
-		hostSet[h] = true
-	}
 	return &DelegatedProvider{
 		name:     name,
-		hosts:    hostSet,
+		hosts:    hosts,
 		sessions: make(map[string]*SessionToken),
 	}
 }
@@ -70,11 +66,8 @@ func (p *DelegatedProvider) Matches(host string) bool {
 	if len(p.hosts) == 0 {
 		return true
 	}
-	for h := range p.hosts {
-		if h == host {
-			return true
-		}
-		if strings.HasPrefix(h, "*.") && strings.HasSuffix(host, h[1:]) {
+	for _, pat := range p.hosts {
+		if manifest.MatchHostGlob(pat, host) {
 			return true
 		}
 	}

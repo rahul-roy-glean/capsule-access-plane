@@ -32,10 +32,12 @@ func IsPrivateIP(ip net.IP) bool {
 // It can be replaced in tests to avoid real DNS lookups.
 var LookupHost = net.LookupHost
 
-// CheckSSRF resolves the host via DNS and rejects private IPs.
+// CheckSSRF resolves the host via DNS, rejects private IPs, and returns
+// the validated IP addresses that must be used for the actual connection
+// (preventing DNS rebinding / TOCTOU attacks).
 // If allowedCIDRs is non-empty, resolved IPs must fall within those ranges.
 // Loopback and link-local are always blocked unless explicitly allowed.
-func CheckSSRF(host string, allowedCIDRs []string) error {
+func CheckSSRF(host string, allowedCIDRs []string) ([]net.IP, error) {
 	// Short-circuit: if host is already an IP literal, skip DNS.
 	var addrs []string
 	if ip := net.ParseIP(host); ip != nil {
@@ -44,10 +46,10 @@ func CheckSSRF(host string, allowedCIDRs []string) error {
 		var err error
 		addrs, err = LookupHost(host)
 		if err != nil {
-			return fmt.Errorf("ssrf: DNS resolution failed for %q: %w", host, err)
+			return nil, fmt.Errorf("ssrf: DNS resolution failed for %q: %w", host, err)
 		}
 		if len(addrs) == 0 {
-			return fmt.Errorf("ssrf: no addresses resolved for %q", host)
+			return nil, fmt.Errorf("ssrf: no addresses resolved for %q", host)
 		}
 	}
 
@@ -56,31 +58,33 @@ func CheckSSRF(host string, allowedCIDRs []string) error {
 	for _, cidr := range allowedCIDRs {
 		_, network, err := net.ParseCIDR(cidr)
 		if err != nil {
-			return fmt.Errorf("ssrf: invalid allowed CIDR %q: %w", cidr, err)
+			return nil, fmt.Errorf("ssrf: invalid allowed CIDR %q: %w", cidr, err)
 		}
 		allowed = append(allowed, *network)
 	}
 
+	resolved := make([]net.IP, 0, len(addrs))
 	for _, addr := range addrs {
 		ip := net.ParseIP(addr)
 		if ip == nil {
-			return fmt.Errorf("ssrf: invalid IP %q resolved for %q", addr, host)
+			return nil, fmt.Errorf("ssrf: invalid IP %q resolved for %q", addr, host)
 		}
 
 		if len(allowed) > 0 {
 			// When an allowlist is specified, IPs must fall within it.
 			if !ipInNets(ip, allowed) {
-				return fmt.Errorf("ssrf: resolved IP %s for %q is not in allowed CIDRs", ip, host)
+				return nil, fmt.Errorf("ssrf: resolved IP %s for %q is not in allowed CIDRs", ip, host)
 			}
 		} else {
 			// Default: block private/loopback/link-local.
 			if IsPrivateIP(ip) {
-				return fmt.Errorf("ssrf: resolved IP %s for %q is a private address", ip, host)
+				return nil, fmt.Errorf("ssrf: resolved IP %s for %q is a private address", ip, host)
 			}
 		}
+		resolved = append(resolved, ip)
 	}
 
-	return nil
+	return resolved, nil
 }
 
 func ipInNets(ip net.IP, nets []net.IPNet) bool {

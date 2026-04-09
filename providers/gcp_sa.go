@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rahul-roy-glean/capsule-access-plane/manifest"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -19,7 +20,7 @@ import (
 // It caches the token and refreshes in the background before expiry.
 type GCPServiceAccountProvider struct {
 	name           string
-	hosts          map[string]bool
+	hosts          []string
 	serviceAccount string
 	scopes         []string
 
@@ -36,13 +37,9 @@ type GCPServiceAccountProvider struct {
 // NewGCPServiceAccountProvider creates a provider that impersonates the given
 // service account to mint scoped access tokens.
 func NewGCPServiceAccountProvider(name string, serviceAccount string, scopes []string, hosts []string) *GCPServiceAccountProvider {
-	hostSet := make(map[string]bool, len(hosts))
-	for _, h := range hosts {
-		hostSet[h] = true
-	}
 	return &GCPServiceAccountProvider{
 		name:           name,
-		hosts:          hostSet,
+		hosts:          hosts,
 		serviceAccount: serviceAccount,
 		scopes:         scopes,
 	}
@@ -55,11 +52,8 @@ func (p *GCPServiceAccountProvider) Matches(host string) bool {
 	if len(p.hosts) == 0 {
 		return true
 	}
-	for h := range p.hosts {
-		if h == host {
-			return true
-		}
-		if strings.HasPrefix(h, "*.") && strings.HasSuffix(host, h[1:]) {
+	for _, pat := range p.hosts {
+		if manifest.MatchHostGlob(pat, host) {
 			return true
 		}
 	}

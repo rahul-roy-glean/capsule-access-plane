@@ -15,6 +15,15 @@ import (
 	"time"
 )
 
+// defaultMaxCache is the default maximum number of cached certificates.
+const defaultMaxCache = 1024
+
+// cachedCert wraps a TLS certificate with its creation time.
+type cachedCert struct {
+	cert      *tls.Certificate
+	createdAt time.Time
+}
+
 // CertAuthority holds the CA certificate and key used to sign leaf certs
 // for SSL bump (MITM) connections.
 type CertAuthority struct {
@@ -22,12 +31,20 @@ type CertAuthority struct {
 	Key     *ecdsa.PrivateKey
 	TLSCert tls.Certificate // CA cert + key for tls.Config
 
-	mu    sync.RWMutex
-	cache map[string]*tls.Certificate // hostname → leaf cert
+	mu       sync.RWMutex
+	cache    map[string]*cachedCert
+	order    []string // insertion order for eviction
+	maxCache int      // maximum cache entries
 }
 
 // NewCertAuthority generates a new self-signed CA for SSL bump.
 func NewCertAuthority() (*CertAuthority, error) {
+	return NewCertAuthorityWithMaxCache(defaultMaxCache)
+}
+
+// NewCertAuthorityWithMaxCache generates a new self-signed CA with a
+// configurable certificate cache size.
+func NewCertAuthorityWithMaxCache(maxCache int) (*CertAuthority, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("ca: generate key: %w", err)
@@ -68,11 +85,17 @@ func NewCertAuthority() (*CertAuthority, error) {
 		Leaf:        caCert,
 	}
 
+	if maxCache <= 0 {
+		maxCache = defaultMaxCache
+	}
+
 	return &CertAuthority{
-		Cert:    caCert,
-		Key:     key,
-		TLSCert: tlsCert,
-		cache:   make(map[string]*tls.Certificate),
+		Cert:     caCert,
+		Key:      key,
+		TLSCert:  tlsCert,
+		cache:    make(map[string]*cachedCert),
+		order:    make([]string, 0, maxCache),
+		maxCache: maxCache,
 	}, nil
 }
 
@@ -80,9 +103,9 @@ func NewCertAuthority() (*CertAuthority, error) {
 // generating and caching it on first request.
 func (ca *CertAuthority) GetCertificate(hostname string) (*tls.Certificate, error) {
 	ca.mu.RLock()
-	if cert, ok := ca.cache[hostname]; ok {
+	if entry, ok := ca.cache[hostname]; ok {
 		ca.mu.RUnlock()
-		return cert, nil
+		return entry.cert, nil
 	}
 	ca.mu.RUnlock()
 
@@ -90,16 +113,46 @@ func (ca *CertAuthority) GetCertificate(hostname string) (*tls.Certificate, erro
 	defer ca.mu.Unlock()
 
 	// Double-check after acquiring write lock.
-	if cert, ok := ca.cache[hostname]; ok {
-		return cert, nil
+	if entry, ok := ca.cache[hostname]; ok {
+		return entry.cert, nil
+	}
+
+	// Evict oldest 25% if cache is full.
+	if len(ca.cache) >= ca.maxCache {
+		ca.evictOldest()
 	}
 
 	cert, err := ca.generateLeaf(hostname)
 	if err != nil {
 		return nil, err
 	}
-	ca.cache[hostname] = cert
+	ca.cache[hostname] = &cachedCert{
+		cert:      cert,
+		createdAt: time.Now(),
+	}
+	ca.order = append(ca.order, hostname)
 	return cert, nil
+}
+
+// evictOldest removes the oldest 25% of cache entries. Must be called with
+// ca.mu held for writing.
+func (ca *CertAuthority) evictOldest() {
+	n := len(ca.order) / 4
+	if n < 1 {
+		n = 1
+	}
+	for _, host := range ca.order[:n] {
+		delete(ca.cache, host)
+	}
+	ca.order = ca.order[n:]
+}
+
+// CacheLen returns the current number of cached certificates.
+// Exported for testing.
+func (ca *CertAuthority) CacheLen() int {
+	ca.mu.RLock()
+	defer ca.mu.RUnlock()
+	return len(ca.cache)
 }
 
 // TLSConfigForClient returns a tls.Config that serves dynamically generated

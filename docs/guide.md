@@ -126,6 +126,15 @@ export PROXY_ADDR=":3128"
 export PROVIDERS_CONFIG="/etc/capsule/providers.json"
 ```
 
+For multi-tenant deployments, set `TENANT_ID` to scope attestation tokens:
+
+```bash
+export TENANT_ID="my-project"
+```
+
+When `TENANT_ID` is set, the access plane rejects attestation tokens whose
+`tenant_id` claim does not match. This prevents cross-tenant token reuse.
+
 ### 2. Configure Providers
 
 Create a `providers.json` with the credential sources your workloads need:
@@ -630,3 +639,98 @@ Check thaw agent logs (`journalctl -u capsule-thaw-agent`). Look for:
 - `Failed to fetch phantom env vars from access plane` — VM can't reach access plane API
 - `Failed to fetch CA cert from access plane` — same network issue
 - Verify MMDS data has `proxy.api_endpoint` and `proxy.attestation_token`
+
+---
+
+## ICAP/Squid Integration
+
+For deployments that already use [Squid](http://www.squid-cache.org/) as
+the HTTP proxy, the access plane provides an ICAP REQMOD server as an
+alternative to the built-in CONNECT proxy. Squid forwards HTTP requests
+to the ICAP server for manifest validation and credential injection.
+
+### How it works
+
+```mermaid
+sequenceDiagram
+    participant VM as VM Agent
+    participant Squid as Squid Proxy
+    participant ICAP as ICAP Server<br/>(Access Plane)
+    participant EXT as External API
+
+    VM->>Squid: HTTP/HTTPS request via proxy
+    Squid->>ICAP: REQMOD (encapsulated HTTP request)
+    ICAP->>ICAP: Validate host against manifests
+    ICAP->>ICAP: SSRF check (DNS + private IP)
+    ICAP->>ICAP: Validate method + path constraints
+
+    alt Provider found for host
+        ICAP->>ICAP: Inject credentials
+        ICAP-->>Squid: 200 OK (modified request)
+    else No provider
+        ICAP-->>Squid: 204 No Modification
+    end
+
+    alt Host denied by manifest
+        ICAP-->>Squid: HTTP 403 Forbidden
+    end
+
+    Squid->>EXT: Forward request
+    EXT-->>Squid: Response
+    Squid-->>VM: Response
+```
+
+### Setup
+
+1. Start the access plane with `ICAP_ADDR`:
+
+```bash
+export ATTESTATION_SECRET="shared-secret"
+export PROVIDERS_CONFIG="/etc/capsule/providers.json"
+export ICAP_ADDR=":1344"
+go run .
+```
+
+2. Configure Squid to use the ICAP server:
+
+```
+# squid.conf
+icap_enable on
+icap_service capsule_reqmod reqmod_precache icap://127.0.0.1:1344/reqmod
+adaptation_access capsule_reqmod allow all
+```
+
+3. Point VMs at Squid as their HTTP proxy (instead of the access plane
+   CONNECT proxy).
+
+### Session context with Squid
+
+When using ICAP, the VM can pass session context via the `X-Proxy-Token`
+header. Squid must be configured to forward this header to the ICAP server.
+The ICAP handler uses it to resolve per-session credentials.
+
+### When to use ICAP vs CONNECT proxy
+
+| | CONNECT Proxy | ICAP/Squid |
+|---|---|---|
+| Deployment | Built-in, single binary | Requires external Squid |
+| SSL bump | Built-in CA + dynamic certs | Squid handles SSL bump |
+| Caching | No | Squid's built-in caching |
+| Logging | Access plane audit log | Squid access log + access plane audit |
+| Use case | Standalone deployments | Existing Squid infrastructure |
+
+---
+
+## Environment Variable Reference
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ATTESTATION_SECRET` | Yes | — | HMAC secret for attestation tokens (min 32 bytes) |
+| `LISTEN_ADDR` | No | `:8080` | HTTP API listen address |
+| `DATABASE_URL` | No | `capsule-access.db` | SQLite database path |
+| `CREDENTIAL_REF` | No | `env:GITHUB_TOKEN` | Default credential reference |
+| `PROVIDERS_CONFIG` | No | — | Path to provider config JSON |
+| `PROXY_ADDR` | No | — | CONNECT proxy listen address |
+| `PROXY_MODE` | No | `connect` | Proxy backend: `connect` or `icap` |
+| `ICAP_ADDR` | No | — | ICAP REQMOD server listen address |
+| `TENANT_ID` | No | — | Multi-tenant scoping — tokens must match |

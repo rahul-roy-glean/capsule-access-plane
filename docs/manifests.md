@@ -77,6 +77,31 @@ Method constraints support glob patterns for URL path enforcement:
 - `*` matches exactly one path segment
 - `**` matches zero or more segments (any depth)
 
+## Host Patterns
+
+Destination hosts support wildcard/glob matching for broad domain coverage:
+
+| Pattern | Matches | Does not match |
+|---------|---------|----------------|
+| `api.github.com` | `api.github.com` | `github.com` |
+| `*.googleapis.com` | `storage.googleapis.com`, `compute.googleapis.com` | `googleapis.com` |
+| `*.slack.com` | `api.slack.com`, `hooks.slack.com` | `slack.com` |
+
+- `*` matches one or more subdomain segments
+- Exact hostnames match only that host
+
+Example:
+
+```yaml
+destinations:
+  - host: "*.googleapis.com"  # matches all GCP API subdomains
+    port: 443
+    protocol: https
+  - host: api.github.com      # exact match only
+    port: 443
+    protocol: https
+```
+
 ## Enforcement Modes
 
 Each method constraint can specify an enforcement mode:
@@ -101,6 +126,23 @@ destinations:
 
 When `allowed_ips` is set, resolved IPs must fall within those CIDRs (the
 default private-IP blocking is replaced by the explicit allowlist).
+
+### DNS Rebinding Prevention
+
+`CheckSSRF` returns the validated IP addresses after DNS resolution. These
+are passed to a `PinnedDialer` that connects directly to the pre-resolved
+IPs, bypassing a second DNS lookup. This prevents TOCTOU (time-of-check-to-time-of-use)
+attacks where an attacker's DNS server returns a public IP during the SSRF
+check, then a private IP during the actual connection.
+
+```mermaid
+flowchart LR
+    A["DNS: api.example.com"] --> B["CheckSSRF<br/>resolve → 93.184.216.34"]
+    B --> C{"Private IP?"}
+    C -->|"Yes"| D["BLOCKED"]
+    C -->|"No"| E["PinnedDialer<br/>connect to 93.184.216.34"]
+    E --> F["Outbound request<br/>(no second DNS lookup)"]
+```
 
 ## Provider Field
 
@@ -194,6 +236,16 @@ Internal admin operations. Supports `remote_execution` only.
 | Approval required | Yes |
 | Audit level | full |
 | Actions | rotate_secrets (admin), drain_node (admin) |
+
+### slack_api
+
+Slack API access. Supports `direct_http` and `remote_execution`.
+
+| Field | Value |
+|-------|-------|
+| Surface | http |
+| Destinations | `*.slack.com` |
+| Default lane | direct_http |
 
 ## How Manifests Are Used
 

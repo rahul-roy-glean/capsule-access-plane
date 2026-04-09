@@ -2,6 +2,177 @@ package manifest
 
 import "testing"
 
+func TestMatchHostGlob(t *testing.T) {
+	tests := []struct {
+		pattern string
+		host    string
+		want    bool
+	}{
+		// Exact matches
+		{"api.github.com", "api.github.com", true},
+		{"api.github.com", "evil.github.com", false},
+		{"api.github.com", "api.github.com.evil.com", false},
+
+		// Case insensitivity
+		{"API.GitHub.COM", "api.github.com", true},
+		{"api.github.com", "API.GITHUB.COM", true},
+		{"*.GitHub.COM", "api.github.com", true},
+		{"**.GitHub.COM", "api.github.com", true},
+
+		// Single wildcard *.suffix
+		{"*.googleapis.com", "storage.googleapis.com", true},
+		{"*.googleapis.com", "compute.googleapis.com", true},
+		{"*.googleapis.com", "googleapis.com", false},     // * requires at least one label
+		{"*.googleapis.com", "a.b.googleapis.com", false}, // * matches exactly one label
+		{"*.foo.bar.com", "x.foo.bar.com", true},
+		{"*.foo.bar.com", "foo.bar.com", false},
+		{"*.foo.bar.com", "a.b.foo.bar.com", false},
+
+		// Double wildcard **.suffix
+		{"**.googleapis.com", "storage.googleapis.com", true},
+		{"**.googleapis.com", "a.b.googleapis.com", true},
+		{"**.googleapis.com", "googleapis.com", true}, // ** matches zero labels
+		{"**.googleapis.com", "a.b.c.d.googleapis.com", true},
+		{"**.example.com", "example.com", true},
+		{"**.example.com", "sub.example.com", true},
+		{"**.example.com", "deep.sub.example.com", true},
+
+		// Edge cases
+		{"", "", true},            // empty pattern matches empty host (exact match)
+		{"", "anything", false},   // empty pattern does not match non-empty host
+		{"anything", "", false},   // non-empty pattern does not match empty host
+		{"*", "anything", false},  // bare * is not a valid wildcard prefix pattern; no "." follows
+		{"**", "anything", false}, // bare ** is not a valid wildcard prefix pattern; no "." follows
+
+		// Patterns that are NOT wildcards (no dot after *)
+		{"*foo.com", "xfoo.com", false},  // not a valid pattern — treated as literal
+		{"**foo.com", "xfoo.com", false}, // not a valid pattern — treated as literal
+
+		// Host must not partially match the suffix
+		{"*.example.com", "notexample.com", false},
+		{"**.example.com", "notexample.com", false},
+	}
+
+	for _, tt := range tests {
+		got := MatchHostGlob(tt.pattern, tt.host)
+		if got != tt.want {
+			t.Errorf("MatchHostGlob(%q, %q) = %v, want %v", tt.pattern, tt.host, got, tt.want)
+		}
+	}
+}
+
+func TestHostMatcher(t *testing.T) {
+	m := NewHostMatcher([]Destination{
+		{Host: "api.github.com"},
+		{Host: "*.googleapis.com"},
+		{Host: "**.internal.example.com"},
+	})
+
+	tests := []struct {
+		host string
+		want bool
+	}{
+		// Exact match
+		{"api.github.com", true},
+		{"API.GITHUB.COM", true},
+		{"evil.github.com", false},
+
+		// Single wildcard
+		{"storage.googleapis.com", true},
+		{"compute.googleapis.com", true},
+		{"googleapis.com", false},
+		{"a.b.googleapis.com", false},
+
+		// Double wildcard
+		{"internal.example.com", true},
+		{"foo.internal.example.com", true},
+		{"a.b.c.internal.example.com", true},
+
+		// Not allowed
+		{"evil.com", false},
+	}
+
+	for _, tt := range tests {
+		got := m.Matches(tt.host)
+		if got != tt.want {
+			t.Errorf("HostMatcher.Matches(%q) = %v, want %v", tt.host, got, tt.want)
+		}
+	}
+}
+
+func TestHostMatcher_Empty(t *testing.T) {
+	m := NewHostMatcher(nil)
+	if m.Matches("anything.com") {
+		t.Error("empty HostMatcher should not match anything")
+	}
+}
+
+func TestMatchesHost(t *testing.T) {
+	destinations := []Destination{
+		{Host: "api.github.com"},
+		{Host: "*.googleapis.com"},
+	}
+
+	if !MatchesHost(destinations, "api.github.com") {
+		t.Error("expected exact match")
+	}
+	if !MatchesHost(destinations, "storage.googleapis.com") {
+		t.Error("expected wildcard match")
+	}
+	if MatchesHost(destinations, "evil.com") {
+		t.Error("expected no match for evil.com")
+	}
+}
+
+func TestFindDestination_Wildcard(t *testing.T) {
+	destinations := []Destination{
+		{Host: "api.github.com", Port: 443},
+		{Host: "*.googleapis.com", Port: 443},
+		{Host: "**.internal.example.com", Port: 8080},
+	}
+
+	// Exact match
+	d := FindDestination(destinations, "api.github.com")
+	if d == nil || d.Host != "api.github.com" {
+		t.Error("expected to find api.github.com")
+	}
+
+	// Single wildcard match
+	d = FindDestination(destinations, "storage.googleapis.com")
+	if d == nil || d.Host != "*.googleapis.com" {
+		t.Errorf("expected *.googleapis.com, got %v", d)
+	}
+
+	// Double wildcard match
+	d = FindDestination(destinations, "deep.internal.example.com")
+	if d == nil || d.Host != "**.internal.example.com" {
+		t.Errorf("expected **.internal.example.com, got %v", d)
+	}
+
+	// No match
+	d = FindDestination(destinations, "evil.com")
+	if d != nil {
+		t.Errorf("expected nil for evil.com, got %v", d)
+	}
+}
+
+func TestBuildAllowedHosts_ReturnsHostMatcher(t *testing.T) {
+	destinations := []Destination{
+		{Host: "exact.com"},
+		{Host: "*.wildcard.com"},
+	}
+	m := BuildAllowedHosts(destinations)
+	if !m.Matches("exact.com") {
+		t.Error("expected exact match")
+	}
+	if !m.Matches("foo.wildcard.com") {
+		t.Error("expected wildcard match")
+	}
+	if m.Matches("evil.com") {
+		t.Error("expected no match")
+	}
+}
+
 func TestMatchPathGlob(t *testing.T) {
 	tests := []struct {
 		pattern string

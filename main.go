@@ -12,6 +12,7 @@ import (
 
 	"github.com/rahul-roy-glean/capsule-access-plane/accessplane"
 	"github.com/rahul-roy-glean/capsule-access-plane/grants"
+	"github.com/rahul-roy-glean/capsule-access-plane/icap"
 	"github.com/rahul-roy-glean/capsule-access-plane/identity"
 	"github.com/rahul-roy-glean/capsule-access-plane/manifest"
 	"github.com/rahul-roy-glean/capsule-access-plane/policy"
@@ -133,11 +134,15 @@ func main() {
 	// Create direct HTTP proxy adapter
 	adapter := runtime.NewDirectHTTPAdapter(registry)
 
+	// Create session registration store and handlers
+	sessionRegStore := server.NewSessionStore()
+	sessionRegHandlers := server.NewSessionRegistrationHandlers(verifier, sessionRegStore)
+
 	// Create handlers
 	resolveHandler := server.NewResolveHandler(verifier, engine, implAvailability, logger)
 	grantHandlers := server.NewGrantHandlers(verifier, grantService, adapter, providerRegistry, registry, logger)
 	executeHandler := server.NewExecuteHandler(verifier, registry, engine, providerRegistry, logger)
-	tokenHandlers := server.NewTokenHandlers(providerRegistry)
+	tokenHandlers := server.NewTokenHandlers(providerRegistry, verifier)
 	phantomHandlers := server.NewPhantomHandlers(registry)
 	gcsHandlers := server.NewGCSHandlers(verifier, providerRegistry, logger)
 
@@ -167,6 +172,11 @@ func main() {
 	// Wire token update and phantom env endpoints
 	mux.HandleFunc("POST /v1/providers/update-token", tokenHandlers.UpdateToken)
 	mux.HandleFunc("GET /v1/phantom-env", phantomHandlers.GetPhantomEnv)
+
+	// Wire session registration endpoints
+	mux.HandleFunc("POST /v1/sessions/register", sessionRegHandlers.RegisterSession)
+	mux.HandleFunc("GET /v1/sessions/{session_id}", sessionRegHandlers.GetSession)
+	mux.HandleFunc("DELETE /v1/sessions/{session_id}", sessionRegHandlers.DeregisterSession)
 
 	// Wire GCS credential endpoint
 	mux.HandleFunc("GET /v1/credentials/gcs", gcsHandlers.GetCredentials)
@@ -212,8 +222,15 @@ func main() {
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Start CONNECT proxy if PROXY_ADDR is set.
-	if proxyAddr != "" {
+	// Determine proxy mode from environment.
+	proxyMode := os.Getenv("PROXY_MODE")
+	if proxyMode == "" && proxyAddr != "" {
+		proxyMode = "connect" // backward compatible
+	}
+
+	// Start proxy backend if configured.
+	var proxyBackend proxy.ProxyBackend
+	if proxyMode == "connect" && proxyAddr != "" {
 		ca, err := proxy.NewCertAuthority()
 		if err != nil {
 			slog.Error("failed to create CA for proxy", "err", err)
@@ -226,13 +243,28 @@ func main() {
 			Providers: providerRegistry,
 			Logger:    logger,
 		}
+		if err := connectProxy.Start(context.Background(), proxyAddr); err != nil {
+			slog.Error("failed to start CONNECT proxy", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("started proxy backend", "mode", connectProxy.Mode(), "addr", connectProxy.Addr())
+		proxyBackend = connectProxy
+	}
+
+	// Start ICAP server if ICAP_ADDR is set.
+	if icapAddr := os.Getenv("ICAP_ADDR"); icapAddr != "" {
+		icapServer := &icap.Server{
+			Manifests: registry,
+			Providers: providerRegistry,
+			Logger:    logger,
+		}
 		go func() {
-			slog.Info("starting CONNECT proxy", "addr", proxyAddr)
-			if err := connectProxy.ListenAndServe(proxyAddr); err != nil {
-				slog.Error("CONNECT proxy error", "err", err)
+			slog.Info("starting ICAP server", "addr", icapAddr)
+			if err := icapServer.ListenAndServe(icapAddr); err != nil {
+				slog.Error("ICAP server error", "err", err)
 			}
 		}()
-		defer func() { _ = connectProxy.Close() }()
+		defer func() { _ = icapServer.Close() }()
 	}
 
 	go func() {
@@ -251,6 +283,11 @@ func main() {
 
 	if err := srv.Shutdown(gracefulCtx); err != nil {
 		slog.Error("shutdown error", "err", err)
+	}
+	if proxyBackend != nil {
+		if err := proxyBackend.Stop(gracefulCtx); err != nil {
+			slog.Error("proxy backend shutdown error", "err", err)
+		}
 	}
 }
 

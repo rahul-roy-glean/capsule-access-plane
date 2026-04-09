@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-var testSecret = []byte("test-secret-key-for-hmac")
+var testSecret = []byte("test-secret-key-for-hmac-32bytes!")
 
 func validClaims() *Claims {
 	return &Claims{
@@ -126,7 +126,6 @@ func TestVerify_MissingRequiredFields(t *testing.T) {
 	}{
 		{"missing RunnerID", func(c *Claims) { c.RunnerID = "" }, "runner_id"},
 		{"missing SessionID", func(c *Claims) { c.SessionID = "" }, "session_id"},
-		{"missing WorkloadKey", func(c *Claims) { c.WorkloadKey = "" }, "workload_key"},
 	}
 
 	for _, tt := range tests {
@@ -176,5 +175,16 @@ func TestNewHMACVerifier_EmptySecret(t *testing.T) {
 	_, err = NewHMACVerifier(nil)
 	if err == nil {
 		t.Fatal("expected error for nil secret")
+	}
+}
+
+func TestNewHMACVerifier_SecretTooShort(t *testing.T) {
+	short := make([]byte, 16)
+	_, err := NewHMACVerifier(short)
+	if err == nil {
+		t.Fatal("expected error for 16-byte secret")
+	}
+	if !strings.Contains(err.Error(), "at least 32 bytes") {
+		t.Errorf("expected 'at least 32 bytes' error, got: %v", err)
 	}
 }
